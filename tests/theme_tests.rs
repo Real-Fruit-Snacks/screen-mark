@@ -1,4 +1,4 @@
-//! The palette is BRAND.md (Real-Fruit-Snacks/.github). These tests pin the
+//! The palette is BRAND.md (Real-Fruit-Snacks/rfs-brand). These tests pin the
 //! values that are verbatim from the guide and check its one hard rule:
 //! every accent passes WCAG AA (>= 4.5:1) as text on the page background.
 

@@ -1,5 +1,5 @@
-# Cover + social preview. Regenerate with Real-Fruit-Snacks/.github:
-#   python3 ../.github/tools/make-cover.py docs/assets/cover.toml
+# Cover + social preview. Regenerate with Real-Fruit-Snacks/rfs-brand:
+#   python3 ../rfs-brand/tools/make-cover.py docs/assets/cover.toml
 name        = "screen-mark"
 description = "Screenshot capture and annotation in pure Rust."
 bullets = [

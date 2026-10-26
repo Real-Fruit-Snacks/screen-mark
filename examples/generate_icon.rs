@@ -2,7 +2,7 @@
 //! Run: cargo run --example generate_icon
 //!
 //! RFS Nightshift badge: a graphite tile with selection brackets in the text
-//! color framing an Ember arrow. Palette: Real-Fruit-Snacks/.github/BRAND.md.
+//! color framing an Ember arrow. Palette: Real-Fruit-Snacks/rfs-brand/BRAND.md.
 
 fn main() {
     generate_icon(256, "icon_256.png");

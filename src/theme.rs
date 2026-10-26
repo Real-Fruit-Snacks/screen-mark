@@ -1,5 +1,5 @@
 //! RFS palette (Nightshift dark / Dayshift light, accent Ember) and the
-//! process-global active mode. Source of truth: Real-Fruit-Snacks/.github/BRAND.md.
+//! process-global active mode. Source of truth: Real-Fruit-Snacks/rfs-brand/BRAND.md.
 //! Every rendered surface reads its colors through these accessors so a
 //! single `set_mode` call re-themes the whole app.
 

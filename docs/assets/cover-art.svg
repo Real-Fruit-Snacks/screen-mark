@@ -1,5 +1,5 @@
 <!-- screen-mark cover panel: the capture overlay. 480x368, origin = panel top-left.
-     Rendered by Real-Fruit-Snacks/.github tools/make-cover.py; colours are {tokens}. -->
+     Rendered by Real-Fruit-Snacks/rfs-brand tools/make-cover.py; colours are {tokens}. -->
 <!-- desktop: three windows -->
 <rect x="24" y="28" width="250" height="150" rx="6" fill="{window}"/><rect x="24" y="28" width="250" height="22" rx="6" fill="{line}"/>
 <rect x="38" y="68" width="150" height="8" rx="2" fill="{line}"/>
