@@ -1,0 +1,14 @@
+# Cover + social preview. Regenerate with Real-Fruit-Snacks/.github:
+#   python3 ../.github/tools/make-cover.py docs/assets/cover.toml
+name        = "screen-mark"
+description = "Screenshot capture and annotation in pure Rust."
+bullets = [
+  "Region, window, or timed capture",
+  "14 annotation tools, undo and redo",
+  "Pin, copy, save, OCR, Imgur",
+  "Windows and Linux (X11)",
+]
+
+[panel]
+kind = "art"
+file = "cover-art.svg"

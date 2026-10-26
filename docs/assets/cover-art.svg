@@ -1,0 +1,56 @@
+<!-- screen-mark cover panel: the capture overlay. 480x368, origin = panel top-left.
+     Rendered by Real-Fruit-Snacks/.github tools/make-cover.py; colours are {tokens}. -->
+<!-- desktop: three windows -->
+<rect x="24" y="28" width="250" height="150" rx="6" fill="{window}"/><rect x="24" y="28" width="250" height="22" rx="6" fill="{line}"/>
+<rect x="38" y="68" width="150" height="8" rx="2" fill="{line}"/>
+<rect x="38" y="90" width="132" height="8" rx="2" fill="{line}"/>
+<rect x="38" y="112" width="114" height="8" rx="2" fill="{line}"/>
+<rect x="38" y="134" width="96" height="8" rx="2" fill="{line}"/>
+<rect x="50" y="204" width="300" height="140" rx="6" fill="{window}"/><rect x="50" y="204" width="300" height="22" rx="6" fill="{line}"/>
+<rect x="64" y="244" width="180" height="8" rx="2" fill="{line}"/>
+<rect x="64" y="266" width="162" height="8" rx="2" fill="{line}"/>
+<rect x="64" y="288" width="144" height="8" rx="2" fill="{line}"/>
+<rect x="64" y="310" width="126" height="8" rx="2" fill="{line}"/>
+<rect x="310" y="44" width="150" height="220" rx="6" fill="{window}"/><rect x="310" y="44" width="150" height="22" rx="6" fill="{line}"/>
+<rect x="324" y="84" width="90" height="8" rx="2" fill="{line}"/>
+<rect x="324" y="106" width="72" height="8" rx="2" fill="{line}"/>
+<rect x="324" y="128" width="54" height="8" rx="2" fill="{line}"/>
+<rect x="324" y="150" width="36" height="8" rx="2" fill="{line}"/>
+<!-- dim everything, then the selected region at full brightness -->
+<rect width="480" height="368" fill="{scrim}"/>
+<rect x="84" y="74" width="300" height="186" fill="{window}"/><rect x="84" y="74" width="300" height="22" fill="{line}"/>
+<rect x="100" y="116" width="200" height="9" rx="2" fill="{line}"/>
+<rect x="100" y="140" width="176" height="9" rx="2" fill="{line}"/>
+<rect x="100" y="164" width="152" height="9" rx="2" fill="{line}"/>
+<rect x="100" y="188" width="128" height="9" rx="2" fill="{line}"/>
+<rect x="100" y="212" width="104" height="9" rx="2" fill="{line}"/>
+<!-- annotations: box, arrow, step marker -->
+<rect x="234" y="110" width="110" height="54" rx="2" fill="none" stroke="{ink-red}" stroke-width="3"/>
+<path d="M124 244 L220 174" stroke="{ink-blue}" stroke-width="3" stroke-linecap="round" fill="none"/><path d="M220 174 L202 176 L214 190 Z" fill="{ink-blue}"/>
+<circle cx="310" cy="224" r="13" fill="{ink-yellow}"/>
+<rfs-text font="mono-semibold" size="15" x="310" y="229.3" anchor="middle" fill="{ink-on}">1</rfs-text>
+<!-- selection border, handles, size readout -->
+<rect x="84" y="74" width="300" height="186" fill="none" stroke="{ember}" stroke-width="2"/>
+<rect x="80" y="70" width="8" height="8" rx="1.5" fill="{ember}"/>
+<rect x="80" y="256" width="8" height="8" rx="1.5" fill="{ember}"/>
+<rect x="380" y="70" width="8" height="8" rx="1.5" fill="{ember}"/>
+<rect x="380" y="256" width="8" height="8" rx="1.5" fill="{ember}"/>
+<rect x="312" y="268" width="72" height="20" rx="4" fill="{raised}" stroke="{line}"/>
+<rfs-text font="mono" size="12" x="348" y="282" anchor="middle" fill="{text}">300 × 186</rfs-text>
+<!-- toolbar: tool keys, active tool, ink swatches -->
+<rect x="40" y="314" width="400" height="40" rx="8" fill="{surface}" stroke="{line}"/>
+<rect x="80" y="321" width="26" height="26" rx="5" fill="{ember}"/>
+<rfs-text font="mono" size="13" x="63" y="339" anchor="middle" fill="{mute}">V</rfs-text>
+<rfs-text font="mono" size="13" x="93" y="339" anchor="middle" fill="{on-ember}">A</rfs-text>
+<rfs-text font="mono" size="13" x="123" y="339" anchor="middle" fill="{mute}">R</rfs-text>
+<rfs-text font="mono" size="13" x="153" y="339" anchor="middle" fill="{mute}">C</rfs-text>
+<rfs-text font="mono" size="13" x="183" y="339" anchor="middle" fill="{mute}">L</rfs-text>
+<rfs-text font="mono" size="13" x="213" y="339" anchor="middle" fill="{mute}">P</rfs-text>
+<rfs-text font="mono" size="13" x="243" y="339" anchor="middle" fill="{mute}">H</rfs-text>
+<rfs-text font="mono" size="13" x="273" y="339" anchor="middle" fill="{mute}">T</rfs-text>
+<rect x="296" y="324" width="1" height="20" fill="{line}"/>
+<rect x="310" y="326" width="16" height="16" rx="3" fill="{ink-red}"/>
+<rect x="332" y="326" width="16" height="16" rx="3" fill="{ink-blue}"/>
+<rect x="354" y="326" width="16" height="16" rx="3" fill="{ink-green}"/>
+<rect x="376" y="326" width="16" height="16" rx="3" fill="{ink-yellow}"/>
+<rect x="398" y="326" width="16" height="16" rx="3" fill="{ink-mauve}"/>
