@@ -1,0 +1,94 @@
+name: Release
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      - name: Build release
+        run: cargo build --release
+      - name: Install cargo-wix
+        run: cargo install cargo-wix
+      - name: Build MSI installer
+        run: cargo wix --no-build --nocapture -o screen-mark-${{ github.ref_name }}-windows-x64.msi
+      - name: Package ZIP
+        run: |
+          New-Item -ItemType Directory -Force -Path release
+          Copy-Item target/release/screen-mark.exe release/
+          Compress-Archive -Path release/screen-mark.exe -DestinationPath screen-mark-${{ github.ref_name }}-windows-x64.zip -Force
+        shell: pwsh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-binary
+          path: |
+            screen-mark-*.zip
+            screen-mark-*.msi
+
+  build-linux:
+    name: Build (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libglib2.0-dev libgtk-3-dev libxdo-dev
+      - name: Build release
+        run: cargo build --release
+      - name: Package
+        run: |
+          mkdir release
+          cp target/release/screen-mark release/
+          chmod +x release/screen-mark
+          tar -czf screen-mark-${{ github.ref_name }}-linux-x64.tar.gz -C release screen-mark
+
+      - name: Package website (self-contained offline hosting bundle)
+        run: |
+          mkdir -p bundle/docs
+          cp -r docs/. bundle/docs/
+          cp .gitlab-ci.yml bundle/
+          zip -r screen-mark-${{ github.ref_name }}-website.zip bundle
+        # The bundle holds the whole static site (HTML, CSS, vendored
+        # IBM Plex fonts, SVGs) plus a GitLab Pages CI file,
+        # so it can be hosted anywhere — GitHub Pages, GitLab Pages, or an
+        # air-gapped web server — with no internet access required.
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-binary
+          path: |
+            screen-mark-*.tar.gz
+            screen-mark-*-website.zip
+
+  release:
+    name: Create Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        with:
+          files: |
+            screen-mark-*.zip
+            screen-mark-*.tar.gz
+            screen-mark-*.msi
+          generate_release_notes: true
+          draft: false

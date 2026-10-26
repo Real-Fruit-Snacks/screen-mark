@@ -1,0 +1,36 @@
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(
+    name = "screen-mark",
+    version,
+    about = "Screenshot capture and annotation in pure Rust"
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Capture a screenshot
+    Capture {
+        /// Copy full screen to clipboard (non-interactive)
+        #[arg(long)]
+        clipboard: bool,
+
+        /// Save full screen to file path (non-interactive)
+        #[arg(long)]
+        save: Option<String>,
+
+        /// Delay in seconds before capturing
+        #[arg(long, default_value_t = 0)]
+        delay: u64,
+    },
+
+    /// Install screen-mark to your system (copies to AppData, adds Start Menu shortcut and PATH)
+    Install,
+
+    /// Uninstall screen-mark from your system
+    Uninstall,
+}

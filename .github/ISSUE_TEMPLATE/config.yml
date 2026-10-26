@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/Real-Fruit-Snacks/screen-mark/security/advisories/new
+    about: Private reporting for vulnerabilities. Do not open a public issue.

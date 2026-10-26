@@ -1,0 +1,186 @@
+/*
+ * RFS design tokens — Nightshift (dark) / Dayshift (light), accent Ember
+ * https://github.com/Real-Fruit-Snacks/.github/blob/main/BRAND.md
+ *
+ * Variable names keep the --twb- prefix so styles.css is untouched; the
+ * values are BRAND.md. bg-3/bg-4 and border-strong are one-step derivations.
+ * Dark is the default; light applies automatically via
+ * prefers-color-scheme, or explicitly with data-theme="light" /
+ * data-theme="dark" on <html>.
+ *
+ * Overriding --twb-accent (and friends) re-derives every tint in
+ * browsers with color-mix support.
+ */
+
+/* ---------- Dark (default) ---------- */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Accent ramp */
+  --twb-accent: #ff6a3d;
+  --twb-accent-alt: #ffc247;
+  --twb-warm: #ffc247;
+
+  /* Semantic hues */
+  --twb-red: #ff6e7a;
+  --twb-orange: #ffc247;
+  --twb-violet: #b78cff;
+
+  /* Surfaces (graphite ramp) */
+  --twb-bg-0: #0c0d10;
+  --twb-bg-1: #13151a;
+  --twb-bg-2: #1a1d24;
+  --twb-bg-3: #21252d;
+  --twb-bg-4: #2a2f38;
+  --twb-border: #262a33;
+  --twb-border-strong: #353a45;
+
+  /* Text */
+  --twb-text-normal: #e8e6e1;
+  --twb-text-soft: #c2c0ba;
+  --twb-text-muted: #8a8f99;
+  --twb-text-faint: #5e636c;
+  --twb-text-on-accent: #0c0d10;
+
+  /* Derived tints — static fallbacks (pre-mixed) */
+  --twb-selection: #ff6a3d33;      /* accent @ 20% */
+  --twb-active-line: #ffc24713;    /* accent-alt @ 7.5% */
+  --twb-nav-active: #ff6a3d1b;     /* accent @ 10.5% */
+  --twb-blockquote-bg: #ff6a3d12;  /* accent @ 7% */
+  --twb-tag-bg: #ff6a3d21;         /* accent @ 13% */
+  --twb-tag-border: #ff6a3d47;     /* accent @ 28% */
+  --twb-highlight: #ffc24738;      /* warm @ 22% */
+  --twb-focus-ring: #ff6a3d2e;     /* accent @ 18% */
+  --twb-glow: 0 0 18px #ff6a3d47;  /* accent @ 28%, opt-in */
+}
+
+/* ---------- Light (auto via system preference) ---------- */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+
+    --twb-accent: #c43f11;
+    --twb-accent-alt: #9a6700;
+    --twb-warm: #9a6700;
+
+    --twb-red: #c8324c;
+    --twb-orange: #9a6700;
+    --twb-violet: #7357b8;
+
+    --twb-bg-0: #f6f5f2;
+    --twb-bg-1: #ffffff;
+    --twb-bg-2: #eceae4;
+    --twb-bg-3: #e6e3dc;
+    --twb-bg-4: #ddd9d1;
+    --twb-border: #d6d3cb;
+    --twb-border-strong: #bdb9b0;
+
+    --twb-text-normal: #1a1b1e;
+    --twb-text-soft: #3a3c42;
+    --twb-text-muted: #6b6f78;
+    --twb-text-faint: #9a9ea6;
+    --twb-text-on-accent: #ffffff;
+
+    --twb-selection: #c43f112b;      /* accent @ 17% */
+    --twb-active-line: #9a670013;
+    --twb-nav-active: #c43f111b;
+    --twb-blockquote-bg: #c43f1112;
+    --twb-tag-bg: #c43f1121;
+    --twb-tag-border: #c43f1147;
+    --twb-highlight: #9a670038;
+    --twb-focus-ring: #c43f112e;
+    --twb-glow: none; /* glow is Nightshift-only */
+  }
+}
+
+/* ---------- Light (explicit opt-in) ---------- */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --twb-accent: #c43f11;
+  --twb-accent-alt: #9a6700;
+  --twb-warm: #9a6700;
+
+  --twb-red: #c8324c;
+  --twb-orange: #9a6700;
+  --twb-violet: #7357b8;
+
+  --twb-bg-0: #f6f5f2;
+  --twb-bg-1: #ffffff;
+  --twb-bg-2: #eceae4;
+  --twb-bg-3: #e6e3dc;
+  --twb-bg-4: #ddd9d1;
+  --twb-border: #d6d3cb;
+  --twb-border-strong: #bdb9b0;
+
+  --twb-text-normal: #1a1b1e;
+  --twb-text-soft: #3a3c42;
+  --twb-text-muted: #6b6f78;
+  --twb-text-faint: #9a9ea6;
+  --twb-text-on-accent: #ffffff;
+
+  --twb-selection: #c43f112b;
+  --twb-active-line: #9a670013;
+  --twb-nav-active: #c43f111b;
+  --twb-blockquote-bg: #c43f1112;
+  --twb-tag-bg: #c43f1121;
+  --twb-tag-border: #c43f1147;
+  --twb-highlight: #9a670038;
+  --twb-focus-ring: #c43f112e;
+  --twb-glow: none; /* glow is Nightshift-only */
+}
+
+/* ---------- Derived tints track the accent where color-mix exists ---------- */
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  :root,
+  :root[data-theme="dark"] {
+    --twb-selection: color-mix(in srgb, var(--twb-accent) 20%, transparent);
+    --twb-active-line: color-mix(in srgb, var(--twb-accent-alt) 7.5%, transparent);
+    --twb-nav-active: color-mix(in srgb, var(--twb-accent) 10.5%, transparent);
+    --twb-blockquote-bg: color-mix(in srgb, var(--twb-accent) 7%, transparent);
+    --twb-tag-bg: color-mix(in srgb, var(--twb-accent) 13%, transparent);
+    --twb-tag-border: color-mix(in srgb, var(--twb-accent) 28%, transparent);
+    --twb-highlight: color-mix(in srgb, var(--twb-warm) 22%, transparent);
+    --twb-focus-ring: color-mix(in srgb, var(--twb-accent) 18%, transparent);
+    --twb-glow: 0 0 18px color-mix(in srgb, var(--twb-accent) 28%, transparent);
+  }
+
+  /* Light: weaker selection, no glow */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --twb-selection: color-mix(in srgb, var(--twb-accent) 17%, transparent);
+      --twb-glow: none;
+    }
+  }
+  :root[data-theme="light"] {
+    --twb-selection: color-mix(in srgb, var(--twb-accent) 17%, transparent);
+    --twb-glow: none;
+  }
+}
+
+/* ---------- Mode-independent tokens ---------- */
+:root {
+  /* Typography */
+  --twb-font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --twb-font-ui: "IBM Plex Sans", Inter, system-ui, sans-serif;
+
+  --twb-line-height: 1.7;        /* prose */
+  --twb-line-height-tight: 1.45; /* UI */
+  --twb-line-height-code: 1.62;  /* code */
+
+  /* Shape */
+  --twb-radius-s: 4px;   /* tags, chips, checkboxes */
+  --twb-radius-m: 6px;   /* base: panels, inputs, code blocks */
+  --twb-radius-l: 8px;   /* large containers */
+  --twb-radius-pill: 999px; /* toggles, slider thumbs only */
+
+  --twb-border-width: 1px;
+
+  /* Elevation — menus, modals, popovers only */
+  --twb-shadow-pane: 0 20px 60px rgba(0, 0, 0, 0.22);
+
+  /* Motion — interactive state changes only; gate behind
+     prefers-reduced-motion in consuming styles */
+  --twb-transition: 120ms ease;
+}

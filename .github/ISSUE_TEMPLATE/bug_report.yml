@@ -1,0 +1,57 @@
+name: Bug report
+description: Something does not work the way the README says it does
+labels: ["bug"]
+
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `screen-mark --version`, or the release tag
+      placeholder: v1.1.3
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: Exact version. On Linux, add the display server.
+      placeholder: Windows 11 24H2 · Ubuntu 24.04 X11
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start screen-mark
+        2. Press Ctrl+Shift+S
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: Include the exact error text if there is one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Terminal output, or `config.toml` if it is config-related. Remove your Imgur client ID.
+      render: shell
+    validations:
+      required: false

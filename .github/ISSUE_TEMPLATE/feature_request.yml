@@ -1,0 +1,29 @@
+name: Feature request
+description: Something screen-mark should do and does not
+labels: ["enhancement"]
+
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and where screen-mark stops you. Concrete beats general.
+      placeholder: "When I capture a window on my second monitor, ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would change
+      description: Command, key, setting, or behaviour. Optional; the problem matters more.
+    validations:
+      required: false
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: How you get by today, if at all.
+    validations:
+      required: false
