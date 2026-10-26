@@ -1,0 +1,14 @@
+# cargo audit configuration. Every ignore needs a reason and a way to drop it.
+[advisories]
+ignore = [
+    # quick-xml: quadratic attribute check / unbounded namespace allocation on
+    # hostile XML. Fixed in quick-xml >= 0.41; neither of our paths parses
+    # untrusted input:
+    #   - 0.39 via wayland-scanner (winit): a proc-macro reading Wayland's own
+    #     protocol XML at compile time. Never in the binary.
+    #   - 0.37 via tauri-winrt-notification (notify-rust): builds toast XML
+    #     from strings this app writes.
+    # Drop both when `cargo tree -i quick-xml` shows only >= 0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
