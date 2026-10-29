@@ -1,46 +1,51 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use std::num::NonZeroU32;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use tray_icon::menu::MenuEvent;
-use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowAttributes, WindowId, WindowLevel};
 
 use winit::application::ApplicationHandler;
 
-use notify_rust::Notification;
-
 use screen_mark::capture;
 use screen_mark::cli::{Cli, Commands};
 use screen_mark::config::Config;
 use screen_mark::countdown::Countdown;
+use screen_mark::display::{self, Monitor};
 use screen_mark::export;
 use screen_mark::geometry::{Color, Point};
 use screen_mark::history_ui::HistoryWindow;
+use screen_mark::hotkey::{GlobalHotkeys, Status};
+use screen_mark::keys::{self, KeyId, KeyMap, KeyPress};
 use screen_mark::overlay::selection::{HitZone, Selection};
 use screen_mark::overlay::toolbar::{ButtonAction, Toolbar, BUTTONS};
 use screen_mark::pin::PinnedWindow;
 use screen_mark::renderer::render_overlay;
-use screen_mark::settings_ui::SettingsWindow;
+use screen_mark::settings_ui::{Outcome, SettingsView, SettingsWindow, Tab};
 use screen_mark::state::{AppState, OverlayState};
+use screen_mark::toast::{self, Click, Kind, Spec, Toast};
 use screen_mark::tools::{
     annotation_bounding_box, apply_redo, apply_undo, hit_test_annotation, move_annotation,
     recolor_annotation, record_undo, resize_annotation, Annotation, AnnotationTool, ResizeHandle,
     ToolKind, UndoAction,
 };
-use screen_mark::tray::{self, TrayState};
+use screen_mark::tray::{self, TrayEvent, TrayHandle};
 use screen_mark::window_detect;
 
 struct App {
     config: Config,
     state: AppState,
-    tray: Option<TrayState>,
+    tray: Option<TrayHandle>,
+    tray_tx: Sender<TrayEvent>,
+    tray_rx: Receiver<TrayEvent>,
+    hotkey_rx: Receiver<global_hotkey::GlobalHotKeyEvent>,
+    hotkey_wake: Arc<std::sync::OnceLock<EventLoopProxy<()>>>,
     overlay_window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     pixmap: Option<tiny_skia::Pixmap>,
@@ -48,11 +53,22 @@ struct App {
     /// Modifier state tracked separately for the settings window (used while
     /// capturing a new global-hotkey combination).
     settings_modifiers: ModifiersState,
+    /// When the Settings window lost focus (see `SETTINGS_BLUR_GRACE`).
+    settings_blur_at: Option<Instant>,
     needs_redraw: bool,
     last_render: Instant,
-    capture_at: Option<Instant>,
-    _hotkey_manager: Option<global_hotkey::GlobalHotKeyManager>,
-    hotkey_id: Option<u32>,
+    /// A capture waiting for something to leave the screen first (the
+    /// countdown window, or a popup that would end up in the picture).
+    capture_at: std::collections::VecDeque<(Instant, CaptureKind)>,
+    hotkeys: GlobalHotkeys,
+    keymap: KeyMap,
+    toast: Option<Toast>,
+    /// Results from capture worker threads, with the monitor to show them on.
+    jobs_tx: Sender<(Option<Spec>, Option<Monitor>)>,
+    jobs_rx: Receiver<(Option<Spec>, Option<Monitor>)>,
+    jobs_pending: usize,
+    /// Wakes the event loop when a worker finishes.
+    proxy: Option<EventLoopProxy<()>>,
     pinned_windows: Vec<PinnedWindow>,
     immediate_capture: bool,
     cli_only: bool,
@@ -66,23 +82,88 @@ struct App {
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16); // ~60fps cap
 
+/// How long to wait after closing a popup before grabbing the screen, so
+/// the compositor has removed it.
+const TOAST_CLEAR_DELAY: Duration = Duration::from_millis(180);
+/// How long the Settings window may be out of focus before it stops
+/// listening for a combination.
+const SETTINGS_BLUR_GRACE: Duration = Duration::from_millis(1500);
+/// How long the tray menu takes to leave the screen after a click.
+const TRAY_MENU_CLOSE_DELAY: Duration = Duration::from_millis(250);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureKind {
+    /// Open the overlay to drag a region (or pick a window).
+    Region,
+    /// One press: grab, save, copy.
+    Screenshot,
+}
+
+/// Tool index (`ShortcutsConfig::entries()` order) to tool.
+const TOOL_KINDS: [ToolKind; 14] = [
+    ToolKind::Select,
+    ToolKind::Arrow,
+    ToolKind::Rectangle,
+    ToolKind::Circle,
+    ToolKind::RoundedRect,
+    ToolKind::Line,
+    ToolKind::Pencil,
+    ToolKind::Highlight,
+    ToolKind::Spotlight,
+    ToolKind::Text,
+    ToolKind::Pixelate,
+    ToolKind::StepMarker,
+    ToolKind::Eyedropper,
+    ToolKind::Measurement,
+];
+
 impl App {
     fn new(config: Config) -> Self {
         screen_mark::theme::set_mode(config.theme_mode());
+        let keymap = KeyMap::from_report(&config.key_report());
+        let (jobs_tx, jobs_rx) = channel();
+        let (tray_tx, tray_rx) = channel();
+        let (hotkey_tx, hotkey_rx) = channel();
+        // Hotkey presses arrive on the hotkey crate's own thread on Linux;
+        // forward them and wake the event loop (on Windows they also wake it
+        // as window messages, but one path for both is simpler). Set once
+        // per process; `proxy` is filled in before the loop starts.
+        let hotkey_wake: Arc<std::sync::OnceLock<EventLoopProxy<()>>> = Arc::default();
+        {
+            let wake = Arc::clone(&hotkey_wake);
+            global_hotkey::GlobalHotKeyEvent::set_event_handler(Some(
+                move |e: global_hotkey::GlobalHotKeyEvent| {
+                    let _ = hotkey_tx.send(e);
+                    if let Some(p) = wake.get() {
+                        let _ = p.send_event(());
+                    }
+                },
+            ));
+        }
         Self {
             config,
             state: AppState::Idle,
             tray: None,
+            tray_tx,
+            tray_rx,
+            hotkey_rx,
+            hotkey_wake,
             overlay_window: None,
             surface: None,
             pixmap: None,
             modifiers: ModifiersState::empty(),
             settings_modifiers: ModifiersState::empty(),
+            settings_blur_at: None,
             needs_redraw: false,
             last_render: Instant::now(),
-            capture_at: None,
-            _hotkey_manager: None,
-            hotkey_id: None,
+            capture_at: std::collections::VecDeque::new(),
+            hotkeys: GlobalHotkeys::new(),
+            keymap,
+            toast: None,
+            jobs_tx,
+            jobs_rx,
+            jobs_pending: 0,
+            proxy: None,
             pinned_windows: Vec::new(),
             immediate_capture: false,
             cli_only: false,
@@ -95,42 +176,210 @@ impl App {
         }
     }
 
-    /// Register the global capture hotkey from config, falling back to the
-    /// default binding when the configured one fails to parse or register.
-    fn register_hotkey_with_fallback(&mut self) {
-        // Drop any previous registration first.
-        self._hotkey_manager = None;
-        self.hotkey_id = None;
-
-        let binding = self.config.hotkey.capture.clone();
-        match screen_mark::hotkey::register_hotkey(&binding) {
-            Ok((manager, id)) => {
-                self._hotkey_manager = Some(manager);
-                self.hotkey_id = Some(id);
-                tracing::info!("Global hotkey registered: {}", binding);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to register hotkey '{}': {}", binding, e);
-                const DEFAULT: &str = "Ctrl+Shift+S";
-                if binding != DEFAULT {
-                    match screen_mark::hotkey::register_hotkey(DEFAULT) {
-                        Ok((manager, id)) => {
-                            self._hotkey_manager = Some(manager);
-                            self.hotkey_id = Some(id);
-                            tracing::info!("Fell back to default hotkey {DEFAULT}");
-                            let _ = Notification::new()
-                                .summary("screen-mark")
-                                .body(&format!(
-                                    "Hotkey '{binding}' could not be registered — using {DEFAULT}"
-                                ))
-                                .timeout(4000)
-                                .show();
-                        }
-                        Err(e2) => tracing::warn!("Default hotkey also failed: {e2}"),
-                    }
+    /// Register both global hotkeys from config. A hotkey that can't be
+    /// registered is reported (popup, Settings shows why); it no longer
+    /// silently falls back to a default.
+    fn apply_hotkeys(&mut self, event_loop: &ActiveEventLoop, announce: bool) {
+        let wanted = vec![
+            (KeyId::Region, self.config.hotkey.region.clone()),
+            (KeyId::Screenshot, self.config.hotkey.screenshot.clone()),
+        ];
+        self.hotkeys.apply(&wanted);
+        let problems: Vec<(KeyId, String)> = wanted
+            .iter()
+            .filter_map(|(id, raw)| {
+                self.hotkeys
+                    .status(*id)
+                    .describe(&screen_mark::settings_ui::display_binding(raw))
+                    .map(|why| (*id, why))
+            })
+            .collect();
+        if !problems.is_empty() {
+            let title = match problems.as_slice() {
+                [(KeyId::Region, _)] => "Region hotkey isn't working",
+                [(_, _)] => "Screenshot hotkey isn't working",
+                _ => "Hotkeys aren't working",
+            };
+            let detail = problems
+                .iter()
+                .map(|(_, why)| why.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            let spec = Spec::new(Kind::Error, title, detail)
+                .hint("Click to choose another key")
+                .click(Click::OpenKeySettings);
+            self.feedback(event_loop, spec, None);
+        } else if announce {
+            let mut parts = Vec::new();
+            for (id, raw) in &wanted {
+                if self.hotkeys.status(*id) == Status::Active {
+                    let what = if *id == KeyId::Region {
+                        "region"
+                    } else {
+                        "save + copy"
+                    };
+                    parts.push(format!(
+                        "{} {what}",
+                        screen_mark::settings_ui::display_binding(raw)
+                    ));
                 }
             }
+            let detail = if parts.is_empty() {
+                "No hotkeys set; use the tray icon".to_string()
+            } else {
+                parts.join(" \u{00b7} ")
+            };
+            let spec = Spec::new(Kind::Info, "screen-mark is running", detail)
+                .hint("Change keys in Settings > Keys");
+            self.feedback(event_loop, spec, None);
         }
+        self.update_tray_labels();
+    }
+
+    fn set_proxy(&mut self, proxy: EventLoopProxy<()>) {
+        let _ = self.hotkey_wake.set(proxy.clone());
+        self.proxy = Some(proxy);
+    }
+
+    fn update_tray_labels(&self) {
+        if let Some(ref tray) = self.tray {
+            tray.set_bindings(&self.config.hotkey.region, &self.config.hotkey.screenshot);
+        }
+    }
+
+    /// Show a result: popup, system notification, or nothing, per the
+    /// `notifications` setting. Errors always get a popup.
+    fn feedback(&mut self, event_loop: &ActiveEventLoop, spec: Spec, monitor: Option<Monitor>) {
+        let mode = self.config.notification_mode();
+        let is_error = spec.kind == Kind::Error;
+        if mode == screen_mark::config::NotificationMode::Off && !is_error {
+            return;
+        }
+        if mode == screen_mark::config::NotificationMode::System && !is_error {
+            let hint = spec
+                .hint
+                .strip_suffix(toast::CLICK_HINT)
+                .unwrap_or(&spec.hint);
+            let body = if hint.is_empty() {
+                spec.detail.clone()
+            } else {
+                format!("{}\n{}", spec.detail, hint)
+            };
+            // Off the UI thread: on Windows this is a synchronous WinRT call.
+            let title = spec.title;
+            std::thread::spawn(move || screen_mark::notify::system(&title, &body));
+            return;
+        }
+        let monitor = monitor.or_else(pointer_monitor);
+        // Replace any popup already up.
+        self.toast = None;
+        self.toast = Toast::show(event_loop, spec, monitor);
+        if self.toast.is_none() {
+            tracing::warn!("Could not create the popup window");
+        }
+    }
+
+    /// Run `job` on a worker thread; its popup is shown when it finishes.
+    fn spawn_job(
+        &mut self,
+        monitor: Option<Monitor>,
+        job: impl FnOnce() -> Option<Spec> + Send + 'static,
+    ) {
+        let tx = self.jobs_tx.clone();
+        let proxy = self.proxy.clone();
+        self.jobs_pending += 1;
+        std::thread::spawn(move || {
+            let spec = job();
+            let _ = tx.send((spec, monitor));
+            if let Some(p) = proxy {
+                let _ = p.send_event(());
+            }
+        });
+    }
+
+    /// Start a capture, first clearing a popup that would end up in it.
+    fn request_capture(&mut self, event_loop: &ActiveEventLoop, kind: CaptureKind) {
+        self.request_capture_in(event_loop, kind, Duration::ZERO);
+    }
+
+    /// Start a capture after `delay` (or as soon as the screen is clear of
+    /// screen-mark's own windows).
+    fn request_capture_in(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        kind: CaptureKind,
+        delay: Duration,
+    ) {
+        // The overlay or a delayed-capture countdown is on screen: a second
+        // capture now would either be lost behind it or contain it.
+        if self.overlay_window.is_some() || self.countdown.is_some() {
+            tracing::info!("A capture is already in progress, ignoring {kind:?}");
+            return;
+        }
+        let toast_up = self.toast.take().is_some();
+        if delay.is_zero() && !toast_up && self.capture_at.is_empty() {
+            match kind {
+                CaptureKind::Region => self.trigger_capture(event_loop),
+                CaptureKind::Screenshot => self.do_screenshot(event_loop),
+            }
+            return;
+        }
+        // Queue behind captures already waiting, so a quick second press
+        // is never lost, and give a popup time to leave the screen.
+        let now = Instant::now();
+        let mut when = now + delay;
+        if toast_up {
+            when = when.max(now + TOAST_CLEAR_DELAY);
+        }
+        if let Some((t, _)) = self.capture_at.back() {
+            when = when.max(*t + Duration::from_millis(60));
+        }
+        self.capture_at.push_back((when, kind));
+    }
+
+    /// One press: capture the monitor under the mouse (or all monitors),
+    /// save it to the save folder and copy it.
+    fn do_screenshot(&mut self, event_loop: &ActiveEventLoop) {
+        let shot = capture::create_capturer()
+            .map_err(|e| e.to_string())
+            .and_then(|c| c.capture_all_screens().map_err(|e| e.to_string()))
+            .and_then(|s| s.into_iter().next().ok_or_else(|| "no screen".to_string()));
+        let full = match shot {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::error!("Screenshot failed: {e}");
+                let spec = Spec::new(Kind::Error, "Couldn't capture the screen", e);
+                self.feedback(event_loop, spec, None);
+                return;
+            }
+        };
+        let monitor = pointer_monitor();
+        let shot = if self.config.screenshot_all_monitors() {
+            full
+        } else {
+            monitor
+                .and_then(|m| display::crop(&full, m.area))
+                .unwrap_or(full)
+        };
+        tracing::info!(
+            "Screenshot {}x{} at ({}, {})",
+            shot.width,
+            shot.height,
+            shot.x_offset,
+            shot.y_offset
+        );
+        let folder = self.config.save_folder();
+        let history = self.config.general.history_enabled;
+        self.spawn_job(monitor, move || {
+            Some(screen_mark::actions::finish_capture(
+                &shot.pixels,
+                shot.width,
+                shot.height,
+                Some(&folder),
+                true,
+                history,
+            ))
+        });
     }
 
     fn trigger_capture(&mut self, event_loop: &ActiveEventLoop) {
@@ -229,9 +478,13 @@ impl App {
         }
     }
 
-    fn open_settings(&mut self, event_loop: &ActiveEventLoop) {
-        if self.settings_window.is_some() {
-            tracing::info!("Settings window already open");
+    fn open_settings(&mut self, event_loop: &ActiveEventLoop, tab: Option<Tab>) {
+        if let Some(ref mut sw) = self.settings_window {
+            if let Some(t) = tab {
+                sw.view.open_tab(t);
+            }
+            sw.window.focus_window();
+            sw.window.request_redraw();
             return;
         }
 
@@ -286,31 +539,41 @@ impl App {
             }
         };
 
-        let mut sw = SettingsWindow::new(window, surface, config);
+        let statuses = [KeyId::Region, KeyId::Screenshot]
+            .into_iter()
+            .map(|id| (id, self.hotkeys.status(id)))
+            .collect();
+        let mut view = SettingsView::new(config, statuses);
+        if let Some(t) = tab {
+            view.open_tab(t);
+        }
+        let mut sw = SettingsWindow::new(window, surface, view);
         sw.render();
         tracing::info!("Settings window opened");
         self.settings_window = Some(sw);
     }
 
-    fn close_settings(&mut self, apply: bool) {
-        if apply {
-            let old_binding = self.config.hotkey.capture.clone();
-            self.config = Config::load(); // reload saved config
+    fn close_settings(&mut self, event_loop: &ActiveEventLoop, saved: bool) {
+        self.settings_window = None;
+        if saved {
+            self.config = Config::load();
+            self.keymap = KeyMap::from_report(&self.config.key_report());
             screen_mark::theme::set_mode(self.config.theme_mode());
-            if self.config.hotkey.capture != old_binding && !self.cli_only {
-                self.register_hotkey_with_fallback();
+            if !self.cli_only {
+                // Resume first (no-op if not suspended), then apply the new keys.
+                self.hotkeys.resume();
+                self.apply_hotkeys(event_loop, false);
             }
         } else {
             // Discard any live theme preview from the Settings toggle.
             screen_mark::theme::set_mode(self.config.theme_mode());
+            self.hotkeys.resume();
         }
         // Settings can toggle autostart — keep the tray checkbox in sync.
         if let Some(ref tray) = self.tray {
-            tray.autostart_check
-                .set_checked(screen_mark::autostart::is_enabled());
+            tray.set_autostart(screen_mark::autostart::is_enabled());
         }
-        self.settings_window = None;
-        tracing::info!("Settings window closed");
+        tracing::info!("Settings window closed (saved: {saved})");
     }
 
     fn open_history(&mut self, event_loop: &ActiveEventLoop) {
@@ -391,83 +654,72 @@ impl App {
     }
 
     fn do_copy(&mut self) {
-        // Collect data from overlay, then close and do heavy work on a background thread
         let copy_data = if let AppState::Capturing(ref overlay) = self.state {
             overlay.flattened_selection()
         } else {
             None
         };
-
         if let Some((pixels, w, h)) = copy_data {
-            let history_enabled = self.config.general.history_enabled;
+            let history = self.config.general.history_enabled;
+            let save_to = self
+                .config
+                .general
+                .copy_also_saves
+                .then(|| self.config.save_folder());
             self.close_overlay();
-            std::thread::spawn(move || match export::copy_to_clipboard(&pixels, w, h) {
-                Ok(()) => {
-                    if history_enabled {
-                        let _ = screen_mark::history::save_to_history(&pixels, w, h);
-                    }
-                    tracing::info!("Copied to clipboard");
-                    let _ = Notification::new()
-                        .summary("screen-mark")
-                        .body("Copied to clipboard")
-                        .timeout(2000)
-                        .show();
-                }
-                Err(e) => {
-                    tracing::error!("Clipboard copy failed: {e}");
-                    let _ = Notification::new()
-                        .summary("screen-mark")
-                        .body(&format!("Copy failed: {e}"))
-                        .timeout(3000)
-                        .show();
-                }
+            self.spawn_job(None, move || {
+                Some(screen_mark::actions::finish_capture(
+                    &pixels,
+                    w,
+                    h,
+                    save_to.as_deref(),
+                    true,
+                    history,
+                ))
             });
         }
     }
 
     fn do_save(&mut self) {
-        // Collect data from overlay, then close and do heavy work on a background thread
         let save_data = if let AppState::Capturing(ref overlay) = self.state {
-            overlay
-                .flattened_selection()
-                .map(|(pixels, w, h)| (pixels, w, h, self.config.save_directory()))
+            overlay.flattened_selection()
         } else {
             None
         };
-
-        if let Some((pixels, w, h, save_dir)) = save_data {
-            let history_enabled = self.config.general.history_enabled;
-            self.close_overlay();
-            std::thread::spawn(move || {
-                match export::save_to_file(pixels, w, h, save_dir.as_deref()) {
-                    Ok(Some(path)) => {
-                        // Copy saved file to history instead of re-encoding
-                        if history_enabled {
-                            let _ = screen_mark::history::save_to_history_from_file(
-                                std::path::Path::new(&path),
-                            );
-                        }
-                        tracing::info!("Saved to {path}");
-                        let _ = Notification::new()
-                            .summary("screen-mark")
-                            .body(&format!("Saved to {path}"))
-                            .timeout(2000)
-                            .show();
-                    }
-                    Ok(None) => {
-                        tracing::info!("Save cancelled by user");
-                    }
-                    Err(e) => {
-                        tracing::error!("Save failed: {e}");
-                        let _ = Notification::new()
-                            .summary("screen-mark")
-                            .body(&format!("Save failed: {e}"))
-                            .timeout(3000)
-                            .show();
-                    }
-                }
+        let Some((pixels, w, h)) = save_data else {
+            return;
+        };
+        let history = self.config.general.history_enabled;
+        let ask = self.config.ask_where_to_save();
+        let folder = self.config.save_folder();
+        self.close_overlay();
+        if !ask {
+            self.spawn_job(None, move || {
+                Some(screen_mark::actions::finish_capture(
+                    &pixels,
+                    w,
+                    h,
+                    Some(&folder),
+                    false,
+                    history,
+                ))
             });
+            return;
         }
+        self.spawn_job(None, move || {
+            let thumb = toast::make_thumb(&pixels, w, h, 192, 120);
+            match export::save_to_file(pixels, w, h, None) {
+                Ok(Some(path)) => {
+                    let path = std::path::PathBuf::from(path);
+                    if history {
+                        let _ = screen_mark::history::save_to_history_from_file(&path);
+                    }
+                    Some(screen_mark::actions::describe(Some(Ok(path)), None, w, h).thumb(thumb))
+                }
+                Ok(None) => None, // dialog cancelled
+                Err(e) => Some(screen_mark::actions::describe(Some(Err(e)), None, w, h)),
+            }
+        });
     }
 
     fn do_upload(&mut self) {
@@ -524,39 +776,29 @@ impl App {
             let imgur_id = self.config.general.imgur_client_id.clone();
             self.close_overlay();
 
-            std::thread::spawn(move || {
-                let png_bytes = match encode_png(pixels, w, h) {
+            self.spawn_job(None, move || {
+                let png_bytes = match export::encode_png(&pixels, w, h) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         tracing::error!("PNG encode failed: {e}");
-                        let _ = Notification::new()
-                            .summary("screen-mark")
-                            .body(&format!("Upload failed: {e}"))
-                            .timeout(3000)
-                            .show();
-                        return;
+                        return Some(Spec::new(Kind::Error, "Upload failed", e));
                     }
                 };
-
-                let toast_msg = match screen_mark::upload::upload_to_imgur(&png_bytes, &imgur_id) {
-                    Ok(url) => {
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(&url);
+                Some(
+                    match screen_mark::upload::upload_to_imgur(&png_bytes, &imgur_id) {
+                        Ok(url) => {
+                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                let _ = clipboard.set_text(&url);
+                            }
+                            tracing::info!("Uploaded to Imgur: {}", url);
+                            Spec::new(Kind::Success, "Uploaded; link copied", url)
                         }
-                        tracing::info!("Uploaded to Imgur: {}", url);
-                        format!("Uploaded! URL copied: {}", url)
-                    }
-                    Err(e) => {
-                        tracing::error!("Imgur upload failed: {}", e);
-                        format!("Upload failed: {}", e)
-                    }
-                };
-
-                let _ = Notification::new()
-                    .summary("screen-mark")
-                    .body(&toast_msg)
-                    .timeout(3000)
-                    .show();
+                        Err(e) => {
+                            tracing::error!("Imgur upload failed: {}", e);
+                            Spec::new(Kind::Error, "Upload failed", e)
+                        }
+                    },
+                )
             });
         }
     }
@@ -571,34 +813,26 @@ impl App {
 
         if let Some((cropped, w, h)) = ocr_data {
             self.close_overlay();
-            std::thread::spawn(move || {
-                let toast_msg = match screen_mark::ocr::extract_text(&cropped, w, h) {
+            self.spawn_job(None, move || {
+                Some(match screen_mark::ocr::extract_text(&cropped, w, h) {
                     Ok(text) => {
                         if let Ok(mut clipboard) = arboard::Clipboard::new() {
                             let _ = clipboard.set_text(&text);
                         }
                         let char_count = text.chars().count();
                         tracing::info!("OCR extracted {} chars", char_count);
-                        if char_count > 80 {
-                            format!(
-                                "Copied {} chars: {}...",
-                                char_count,
-                                text.chars().take(80).collect::<String>()
-                            )
-                        } else {
-                            format!("Copied: {}", text)
-                        }
+                        let preview: String = text.chars().take(80).collect();
+                        Spec::new(
+                            Kind::Success,
+                            format!("Copied {char_count} characters of text"),
+                            preview.replace(['\r', '\n'], " "),
+                        )
                     }
                     Err(e) => {
                         tracing::error!("OCR failed: {e}");
-                        format!("OCR failed: {e}")
+                        Spec::new(Kind::Error, "Couldn't read text", e)
                     }
-                };
-                let _ = notify_rust::Notification::new()
-                    .summary("screen-mark")
-                    .body(&toast_msg)
-                    .timeout(3000)
-                    .show();
+                })
             });
         }
     }
@@ -629,89 +863,71 @@ impl App {
     }
 
     fn process_tray_events(&mut self, event_loop: &ActiveEventLoop) {
-        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                tracing::info!("Tray icon clicked — triggering capture");
-                self.trigger_capture(event_loop);
-            }
-        }
-
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if let Some(ref tray) = self.tray {
-                if event.id == tray.capture_id {
-                    tracing::info!("Capture menu item clicked");
-                    self.trigger_capture(event_loop);
-                } else if event.id == tray.window_capture_id {
-                    tracing::info!("Window capture menu item clicked");
+        while let Ok(event) = self.tray_rx.try_recv() {
+            let item = match event {
+                TrayEvent::IconClicked => {
+                    tracing::info!("Tray icon clicked — triggering capture");
+                    self.request_capture(event_loop, CaptureKind::Region);
+                    continue;
+                }
+                TrayEvent::Menu(item) => item,
+            };
+            use screen_mark::tray::Item;
+            // Let the menu fade out first, or it ends up in the capture.
+            let menu_gone = TRAY_MENU_CLOSE_DELAY;
+            match item {
+                Item::Region => self.request_capture_in(event_loop, CaptureKind::Region, menu_gone),
+                Item::Screenshot => {
+                    self.request_capture_in(event_loop, CaptureKind::Screenshot, menu_gone)
+                }
+                Item::Window => {
                     self.window_capture_mode = true;
                     self.window_rects = window_detect::enumerate_window_rects();
                     tracing::info!("Enumerated {} windows", self.window_rects.len());
-                    self.trigger_capture(event_loop);
-                } else if event.id == tray.delay_3_id {
-                    tracing::info!("Capturing in 3 seconds...");
-                    // Don't set capture_at — countdown reaching 0 triggers the capture
-                    self.countdown = Countdown::start(event_loop, 3);
-                } else if event.id == tray.delay_5_id {
-                    tracing::info!("Capturing in 5 seconds...");
-                    self.countdown = Countdown::start(event_loop, 5);
-                } else if event.id == tray.delay_10_id {
-                    tracing::info!("Capturing in 10 seconds...");
-                    self.countdown = Countdown::start(event_loop, 10);
-                } else if event.id == tray.autostart_id {
-                    let new_state = !screen_mark::autostart::is_enabled();
-                    if let Err(e) = screen_mark::autostart::set_enabled(new_state) {
-                        tracing::error!("Auto-start toggle failed: {}", e);
+                    self.request_capture_in(event_loop, CaptureKind::Region, menu_gone);
+                }
+                Item::Delay(secs) => {
+                    tracing::info!("Capturing in {secs} seconds...");
+                    self.toast = None;
+                    // The countdown reaching 0 schedules the capture.
+                    self.countdown = Countdown::start(event_loop, secs);
+                }
+                Item::OpenFolder => {
+                    let folder = self.config.save_folder();
+                    if let Err(e) = std::fs::create_dir_all(&folder) {
+                        let spec =
+                            Spec::new(Kind::Error, "Can't open the save folder", e.to_string());
+                        self.feedback(event_loop, spec, None);
                     } else {
-                        tracing::info!(
-                            "Auto-start {}",
-                            if new_state { "enabled" } else { "disabled" }
-                        );
-                        tray.autostart_check.set_checked(new_state);
+                        toast::show_in_folder(&folder);
                     }
-                } else if event.id == tray.history_id {
-                    tracing::info!("History menu item clicked");
-                    self.open_history(event_loop);
-                } else if event.id == tray.quit_id {
+                }
+                Item::History => self.open_history(event_loop),
+                Item::Autostart => {
+                    let new_state = !screen_mark::autostart::is_enabled();
+                    match screen_mark::autostart::set_enabled(new_state) {
+                        Ok(()) => {
+                            if let Some(ref tray) = self.tray {
+                                tray.set_autostart(new_state);
+                            }
+                        }
+                        Err(e) => tracing::error!("Auto-start toggle failed: {}", e),
+                    }
+                }
+                Item::Settings => self.open_settings(event_loop, None),
+                Item::About => {
+                    let version = env!("CARGO_PKG_VERSION");
+                    let spec = Spec::new(
+                        Kind::Info,
+                        format!("screen-mark {version}"),
+                        "github.com/Real-Fruit-Snacks/screen-mark",
+                    );
+                    self.feedback(event_loop, spec, None);
+                    open_url("https://github.com/Real-Fruit-Snacks/screen-mark");
+                }
+                Item::Quit => {
                     tracing::info!("Quit requested");
                     event_loop.exit();
-                } else if event.id == tray.settings_id {
-                    tracing::info!("Settings menu item clicked");
-                    self.open_settings(event_loop);
-                } else if event.id == tray.about_id {
-                    let version = env!("CARGO_PKG_VERSION");
-                    let _ = Notification::new()
-                        .summary("screen-mark")
-                        .body(&format!(
-                            "screen-mark v{}\nScreenshot capture & annotation tool\ngithub.com/Real-Fruit-Snacks/screen-mark",
-                            version
-                        ))
-                        .timeout(5000)
-                        .show();
-                    #[cfg(target_os = "windows")]
-                    {
-                        // CREATE_NO_WINDOW — cmd.exe would otherwise flash a console
-                        use std::os::windows::process::CommandExt;
-                        const CREATE_NO_WINDOW: u32 = 0x08000000;
-                        let _ = std::process::Command::new("cmd")
-                            .args([
-                                "/C",
-                                "start",
-                                "https://github.com/Real-Fruit-Snacks/screen-mark",
-                            ])
-                            .creation_flags(CREATE_NO_WINDOW)
-                            .spawn();
-                    }
-                    #[cfg(target_os = "linux")]
-                    {
-                        let _ = std::process::Command::new("xdg-open")
-                            .arg("https://github.com/Real-Fruit-Snacks/screen-mark")
-                            .spawn();
-                    }
                 }
             }
         }
@@ -898,75 +1114,27 @@ fn hitzone_to_cursor(zone: HitZone, overlay: &OverlayState) -> CursorIcon {
     }
 }
 
-/// Encode RGBA pixels to PNG bytes.
-fn encode_png(pixels: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>, String> {
-    let img = image::RgbaImage::from_raw(w, h, pixels).ok_or("invalid image data")?;
-    let mut png_bytes = Vec::new();
-    img.write_to(
-        &mut std::io::Cursor::new(&mut png_bytes),
-        image::ImageFormat::Png,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(png_bytes)
+/// The monitor under the mouse pointer, if both can be read.
+fn pointer_monitor() -> Option<Monitor> {
+    let (x, y) = display::pointer()?;
+    display::monitor_at(&display::monitors(), x, y)
 }
 
-/// Build a hotkey binding string (e.g. "Ctrl+Shift+S") from the current
-/// modifier state and a pressed key. Returns None for keys that can't be a
-/// global hotkey or when no Ctrl/Alt/Super modifier is held.
-fn hotkey_binding_from_key(mods: ModifiersState, key: &Key) -> Option<String> {
-    let key_part: String = match key {
-        Key::Character(ch) => {
-            let s = ch.as_str();
-            let c = s.chars().next()?;
-            if s.chars().count() == 1 && (c.is_ascii_alphabetic() || c.is_ascii_digit()) {
-                c.to_ascii_uppercase().to_string()
-            } else {
-                return None;
-            }
-        }
-        Key::Named(named) => match named {
-            NamedKey::F1 => "F1".into(),
-            NamedKey::F2 => "F2".into(),
-            NamedKey::F3 => "F3".into(),
-            NamedKey::F4 => "F4".into(),
-            NamedKey::F5 => "F5".into(),
-            NamedKey::F6 => "F6".into(),
-            NamedKey::F7 => "F7".into(),
-            NamedKey::F8 => "F8".into(),
-            NamedKey::F9 => "F9".into(),
-            NamedKey::F10 => "F10".into(),
-            NamedKey::F11 => "F11".into(),
-            NamedKey::F12 => "F12".into(),
-            NamedKey::PrintScreen => "PrintScreen".into(),
-            _ => return None,
-        },
-        _ => return None,
-    };
-
-    // Require a strong modifier so the hotkey can't swallow normal typing.
-    if !(mods.control_key() || mods.alt_key() || mods.super_key()) {
-        return None;
+fn open_url(url: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        // CREATE_NO_WINDOW — cmd.exe would otherwise flash a console
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
     }
-
-    let mut parts: Vec<String> = Vec::new();
-    if mods.control_key() {
-        parts.push("Ctrl".into());
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     }
-    if mods.shift_key() {
-        parts.push("Shift".into());
-    }
-    if mods.alt_key() {
-        parts.push("Alt".into());
-    }
-    if mods.super_key() {
-        parts.push("Super".into());
-    }
-    parts.push(key_part);
-    let binding = parts.join("+");
-
-    // Final validation through the real parser
-    screen_mark::hotkey::parse_binding(&binding).ok()?;
-    Some(binding)
 }
 
 impl ApplicationHandler for App {
@@ -974,9 +1142,16 @@ impl ApplicationHandler for App {
         tracing::info!("Application resumed");
         event_loop.set_control_flow(ControlFlow::Wait);
 
-        if !self.cli_only {
+        if !self.cli_only && !self.startup_notified {
+            self.startup_notified = true;
             if self.tray.is_none() {
-                match tray::create_tray() {
+                let proxy = self.proxy.clone();
+                let wake = move || {
+                    if let Some(ref p) = proxy {
+                        let _ = p.send_event(());
+                    }
+                };
+                match tray::start(self.tray_tx.clone(), wake) {
                     Ok(t) => {
                         tracing::info!("Tray icon created");
                         self.tray = Some(t);
@@ -986,31 +1161,18 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-
-            if self._hotkey_manager.is_none() {
-                self.register_hotkey_with_fallback();
-            }
-        }
-
-        // Show startup notification (only once, not in CLI mode)
-        if !self.cli_only
-            && self.tray.is_some()
-            && !self.immediate_capture
-            && !self.startup_notified
-        {
-            self.startup_notified = true;
-            let hotkey = &self.config.hotkey.capture;
-            let _ = Notification::new()
-                .summary("screen-mark")
-                .body(&format!("Ready — {} to capture", hotkey))
-                .timeout(3000)
-                .show();
+            // Register hotkeys and say which ones are live (or which failed).
+            self.apply_hotkeys(event_loop, true);
         }
 
         if self.immediate_capture {
             self.immediate_capture = false;
             self.trigger_capture(event_loop);
         }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        // A worker finished; about_to_wait drains the results.
     }
 
     fn window_event(
@@ -1094,116 +1256,144 @@ impl ApplicationHandler for App {
             }
         }
 
+        // Check if event is for the popup
+        if let Some(ref mut t) = self.toast {
+            if t.window_id() == _window_id {
+                match event {
+                    WindowEvent::RedrawRequested | WindowEvent::Resized(_) => t.render(),
+                    WindowEvent::ScaleFactorChanged {
+                        mut inner_size_writer,
+                        ..
+                    } => t.keep_place(&mut inner_size_writer),
+                    WindowEvent::CursorMoved { .. } => t.hold(),
+                    WindowEvent::MouseInput {
+                        state: ElementState::Released,
+                        button,
+                        ..
+                    } => {
+                        let click = t.spec.click.clone();
+                        self.toast = None;
+                        if button == WinitMouseButton::Left {
+                            match click {
+                                Click::ShowFile(path) => toast::show_in_folder(&path),
+                                Click::OpenKeySettings => {
+                                    self.open_settings(_event_loop, Some(Tab::Keys))
+                                }
+                                Click::Nothing => {}
+                            }
+                        }
+                    }
+                    WindowEvent::CloseRequested => self.toast = None,
+                    _ => {}
+                }
+                return;
+            }
+        }
+
         // Check if event is for the settings window
         if let Some(ref sw) = self.settings_window {
             if sw.window.id() == _window_id {
-                match event {
-                    WindowEvent::CloseRequested => {
-                        self.close_settings(false);
-                        return;
-                    }
+                let outcome = match event {
+                    WindowEvent::CloseRequested => Outcome::Close { saved: false },
                     WindowEvent::RedrawRequested => {
                         if let Some(ref mut sw) = self.settings_window {
                             sw.render();
                         }
-                        return;
+                        Outcome::Nothing
                     }
                     WindowEvent::CursorMoved { position, .. } => {
-                        if let Some(ref mut sw) = self.settings_window {
-                            if sw.on_cursor_moved(position.x as f32, position.y as f32) {
-                                sw.needs_redraw = true;
-                                sw.window.request_redraw();
-                            }
+                        let moved = self.settings_window.as_mut().is_some_and(|sw| {
+                            sw.on_cursor_moved(position.x as f32, position.y as f32)
+                        });
+                        if moved {
+                            Outcome::Redraw
+                        } else {
+                            Outcome::Nothing
                         }
-                        return;
                     }
                     WindowEvent::MouseInput {
                         state: ElementState::Pressed,
                         button: WinitMouseButton::Left,
                         ..
-                    } => {
-                        let (cx, cy) = if let Some(ref sw) = self.settings_window {
-                            (sw.cursor_pos.0, sw.cursor_pos.1)
-                        } else {
-                            return;
+                    } => match self.settings_window {
+                        Some(ref mut sw) => sw.on_click(),
+                        None => Outcome::Nothing,
+                    },
+                    WindowEvent::MouseWheel { delta, .. } => {
+                        let lines = match delta {
+                            MouseScrollDelta::LineDelta(_, y) => y,
+                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 26.0,
                         };
-                        let action = if let Some(ref sw) = self.settings_window {
-                            sw.on_click(cx, cy)
+                        let scrolled = self
+                            .settings_window
+                            .as_mut()
+                            .is_some_and(|sw| sw.view.scroll_by(lines));
+                        if scrolled {
+                            Outcome::Redraw
                         } else {
-                            None
-                        };
-                        if let Some(action) = action {
-                            let should_close = if let Some(ref mut sw) = self.settings_window {
-                                sw.handle_action(action)
-                            } else {
-                                false
-                            };
-                            if should_close {
-                                self.close_settings(true);
-                            } else if let Some(ref sw) = self.settings_window {
-                                sw.window.request_redraw();
-                            }
+                            Outcome::Nothing
                         }
-                        return;
                     }
                     WindowEvent::ModifiersChanged(mods) => {
                         self.settings_modifiers = mods.state();
-                        return;
-                    }
-                    WindowEvent::KeyboardInput { ref event, .. }
-                        if event.state == ElementState::Pressed =>
-                    {
-                        // If rebinding the global hotkey, capture the combo
-                        if let Some(ref mut sw) = self.settings_window {
-                            if sw.editing_hotkey {
-                                if let Key::Named(NamedKey::Escape) = &event.logical_key {
-                                    sw.editing_hotkey = false;
-                                    sw.needs_redraw = true;
-                                    sw.window.request_redraw();
-                                    return;
-                                }
-                                if let Some(binding) = hotkey_binding_from_key(
-                                    self.settings_modifiers,
-                                    &event.logical_key,
-                                ) {
-                                    sw.config.hotkey.capture = binding;
-                                    sw.editing_hotkey = false;
-                                    sw.needs_redraw = true;
-                                    sw.window.request_redraw();
-                                }
-                                // Bare keys / unsupported keys keep edit mode active
-                                return;
-                            }
-                        }
-
-                        // If editing a shortcut, capture the key
-                        if let Some(ref mut sw) = self.settings_window {
-                            if sw.editing_shortcut.is_some() {
-                                let key_str = match &event.logical_key {
-                                    Key::Character(ch) => Some(ch.as_str().to_lowercase()),
-                                    Key::Named(NamedKey::Escape) => {
-                                        // Cancel editing
-                                        sw.editing_shortcut = None;
-                                        sw.needs_redraw = true;
-                                        sw.window.request_redraw();
-                                        None
-                                    }
-                                    _ => None,
-                                };
-                                if let Some(key) = key_str {
-                                    sw.on_key_press(&key);
-                                    sw.window.request_redraw();
-                                }
-                                return;
-                            }
-                        }
-
-                        if let Key::Named(NamedKey::Escape) = &event.logical_key {
-                            self.close_settings(false);
-                            return;
+                        let press = KeyPress {
+                            mods: keys::mods_from_winit(self.settings_modifiers),
+                            key: None,
+                            pressed: true,
+                        };
+                        match self.settings_window {
+                            Some(ref mut sw) => sw.view.key(press),
+                            None => Outcome::Nothing,
                         }
                     }
-                    _ => {}
+                    WindowEvent::Focused(false) => {
+                        // Switched away while listening: the keys now go to
+                        // another app while the global hotkeys stay
+                        // suspended, so listening stops (in about_to_wait,
+                        // after a grace period: on X11, pressing a combo
+                        // another app has grabbed also blurs the window
+                        // for as long as it's held).
+                        self.settings_modifiers = ModifiersState::empty();
+                        self.settings_blur_at = Some(Instant::now());
+                        Outcome::Nothing
+                    }
+                    WindowEvent::Focused(true) => {
+                        self.settings_blur_at = None;
+                        Outcome::Nothing
+                    }
+                    WindowEvent::KeyboardInput { ref event, .. } => {
+                        let key = if keys::is_modifier_key(&event.logical_key) {
+                            None
+                        } else {
+                            keys::key_from_winit(&event.logical_key, &event.physical_key)
+                        };
+                        // Skip auto-repeat and keys that can't be bound (media, IME, ...).
+                        let unbindable =
+                            key.is_none() && !keys::is_modifier_key(&event.logical_key);
+                        if unbindable || event.repeat {
+                            Outcome::Nothing
+                        } else {
+                            let press = KeyPress {
+                                mods: keys::mods_from_winit(self.settings_modifiers),
+                                key,
+                                pressed: event.state == ElementState::Pressed,
+                            };
+                            match self.settings_window {
+                                Some(ref mut sw) => sw.view.key(press),
+                                None => Outcome::Nothing,
+                            }
+                        }
+                    }
+                    _ => Outcome::Nothing,
+                };
+                match outcome {
+                    Outcome::Close { saved } => self.close_settings(_event_loop, saved),
+                    Outcome::Redraw => {
+                        if let Some(ref sw) = self.settings_window {
+                            sw.window.request_redraw();
+                        }
+                    }
+                    Outcome::Nothing => {}
                 }
                 return;
             }
@@ -1215,7 +1405,7 @@ impl ApplicationHandler for App {
                 match event {
                     WindowEvent::CloseRequested => {
                         self.countdown = None;
-                        self.capture_at = None; // cancel the delayed capture
+                        self.capture_at.clear(); // cancel the delayed capture
                         return;
                     }
                     WindowEvent::RedrawRequested => {
@@ -1361,159 +1551,132 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                match &event.logical_key {
-                    Key::Named(NamedKey::Escape) => {
-                        let overlay = match &mut self.state {
-                            AppState::Capturing(o) => o,
-                            _ => return,
-                        };
-                        if overlay.selected_index.is_some() {
-                            overlay.selected_index = None;
-                            overlay.select_drag_start = None;
-                            self.needs_redraw = true;
-                        } else {
-                            self.close_overlay();
+                // The rebindable key map comes first, so a bound Ctrl+Enter or
+                // Ctrl+Delete runs its action; unbound Esc / Delete / Enter
+                // keep their fixed meaning below.
+                let has_selection = overlay.selection.is_some();
+                let mods = keys::mods_from_winit(self.modifiers);
+                let key = keys::key_from_winit(&event.logical_key, &event.physical_key);
+                let action = key.and_then(|k| self.keymap.editor_action(mods, k));
+                let tool = key.and_then(|k| self.keymap.tool(mods, k)).or_else(|| {
+                    // 2.0-style tool keys bound to a typed character.
+                    keys::typed_char(&event.logical_key)
+                        .and_then(|c| self.keymap.tool(mods, keys::Key::Typed(c)))
+                });
+                if let Some(action) = action {
+                    match action {
+                        KeyId::Copy => {
+                            self.do_copy();
                             return;
                         }
-                    }
-                    Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
-                        let overlay = match &mut self.state {
-                            AppState::Capturing(o) => o,
-                            _ => return,
-                        };
-                        if let Some(idx) = overlay.selected_index {
-                            if idx < overlay.annotations.len() {
-                                let removed = overlay.annotations.remove(idx);
-                                record_undo(
+                        KeyId::Save => {
+                            self.do_save();
+                            return;
+                        }
+                        KeyId::Pin => {
+                            self.do_pin(_event_loop);
+                            return;
+                        }
+                        KeyId::Ocr => {
+                            self.do_ocr();
+                            return;
+                        }
+                        KeyId::Upload => {
+                            self.do_upload();
+                            return;
+                        }
+                        KeyId::Undo | KeyId::Redo => {
+                            let overlay = match &mut self.state {
+                                AppState::Capturing(o) => o,
+                                _ => return,
+                            };
+                            let changed = if action == KeyId::Undo {
+                                apply_undo(
+                                    &mut overlay.annotations,
                                     &mut overlay.undo_stack,
                                     &mut overlay.redo_stack,
-                                    UndoAction::Delete(idx, removed),
-                                );
+                                )
+                            } else {
+                                apply_redo(
+                                    &mut overlay.annotations,
+                                    &mut overlay.undo_stack,
+                                    &mut overlay.redo_stack,
+                                )
+                            };
+                            if changed {
                                 overlay.selected_index = None;
                                 overlay.sync_step_counter();
                                 self.needs_redraw = true;
                             }
                         }
-                    }
-                    Key::Named(NamedKey::Enter) if overlay.selection.is_some() => {
-                        // Quick copy — same path as Ctrl+C / the Copy button,
-                        // annotations included, clipboard work off-thread.
-                        self.do_copy();
-                        return;
-                    }
-                    Key::Character(ch) => {
-                        let ctrl = self.modifiers.control_key();
-                        let shift = self.modifiers.shift_key();
-                        // Compare case-insensitively so Caps Lock / Shift don't
-                        // break shortcuts ("Z" vs "z"); redo is decided by the
-                        // actual Shift modifier, not the produced character.
-                        let key_lower = ch.as_str().to_lowercase();
-                        match key_lower.as_str() {
-                            "c" if ctrl => {
-                                self.do_copy();
-                                return;
-                            }
-                            "s" if ctrl => {
-                                self.do_save();
-                                return;
-                            }
-                            "z" if ctrl && shift => {
-                                // Redo
-                                let overlay = match &mut self.state {
-                                    AppState::Capturing(o) => o,
-                                    _ => return,
-                                };
-                                if apply_redo(
-                                    &mut overlay.annotations,
-                                    &mut overlay.undo_stack,
-                                    &mut overlay.redo_stack,
-                                ) {
-                                    overlay.selected_index = None;
-                                    overlay.sync_step_counter();
-                                    self.needs_redraw = true;
-                                }
-                            }
-                            "z" if ctrl => {
-                                // Undo
-                                let overlay = match &mut self.state {
-                                    AppState::Capturing(o) => o,
-                                    _ => return,
-                                };
-                                if apply_undo(
-                                    &mut overlay.annotations,
-                                    &mut overlay.undo_stack,
-                                    &mut overlay.redo_stack,
-                                ) {
-                                    overlay.selected_index = None;
-                                    overlay.sync_step_counter();
-                                    self.needs_redraw = true;
-                                }
-                            }
-                            "a" if ctrl => {
-                                // Ctrl+A: select entire screen
-                                let overlay = match &mut self.state {
-                                    AppState::Capturing(o) => o,
-                                    _ => return,
-                                };
-                                overlay.selection = Some(Selection {
-                                    x: 0.0,
-                                    y: 0.0,
-                                    width: overlay.screenshot.width as f32,
-                                    height: overlay.screenshot.height as f32,
-                                });
-                                self.needs_redraw = true;
-                            }
-                            // Tool keyboard shortcuts (no Ctrl) — config-driven,
-                            // case-insensitive so Caps Lock doesn't disable them.
-                            key_str if !ctrl => {
-                                let shortcuts = &self.config.shortcuts;
-                                let eq = |bound: &str| key_str.eq_ignore_ascii_case(bound);
-                                let new_tool = if eq(&shortcuts.select) {
-                                    Some(ToolKind::Select)
-                                } else if eq(&shortcuts.arrow) {
-                                    Some(ToolKind::Arrow)
-                                } else if eq(&shortcuts.rectangle) {
-                                    Some(ToolKind::Rectangle)
-                                } else if eq(&shortcuts.circle) {
-                                    Some(ToolKind::Circle)
-                                } else if eq(&shortcuts.rounded_rect) {
-                                    Some(ToolKind::RoundedRect)
-                                } else if eq(&shortcuts.line) {
-                                    Some(ToolKind::Line)
-                                } else if eq(&shortcuts.pencil) {
-                                    Some(ToolKind::Pencil)
-                                } else if eq(&shortcuts.highlight) {
-                                    Some(ToolKind::Highlight)
-                                } else if eq(&shortcuts.spotlight) {
-                                    Some(ToolKind::Spotlight)
-                                } else if eq(&shortcuts.text) {
-                                    Some(ToolKind::Text)
-                                } else if eq(&shortcuts.pixelate) {
-                                    Some(ToolKind::Pixelate)
-                                } else if eq(&shortcuts.step_marker) {
-                                    Some(ToolKind::StepMarker)
-                                } else if eq(&shortcuts.eyedropper) {
-                                    Some(ToolKind::Eyedropper)
-                                } else if eq(&shortcuts.measurement) {
-                                    Some(ToolKind::Measurement)
-                                } else {
-                                    None
-                                };
-
-                                if let Some(tool) = new_tool {
-                                    let overlay = match &mut self.state {
-                                        AppState::Capturing(o) => o,
-                                        _ => return,
-                                    };
-                                    overlay.active_tool = tool;
-                                    overlay.selected_index = None;
-                                    self.needs_redraw = true;
-                                }
-                            }
-                            _ => {}
+                        KeyId::SelectAll => {
+                            let overlay = match &mut self.state {
+                                AppState::Capturing(o) => o,
+                                _ => return,
+                            };
+                            overlay.selection = Some(Selection {
+                                x: 0.0,
+                                y: 0.0,
+                                width: overlay.screenshot.width as f32,
+                                height: overlay.screenshot.height as f32,
+                            });
+                            self.needs_redraw = true;
                         }
+                        _ => {}
                     }
-                    _ => {}
+                } else if let Some(i) = tool {
+                    if let Some(tool) = TOOL_KINDS.get(i).copied() {
+                        let overlay = match &mut self.state {
+                            AppState::Capturing(o) => o,
+                            _ => return,
+                        };
+                        overlay.active_tool = tool;
+                        overlay.selected_index = None;
+                        self.needs_redraw = true;
+                    }
+                } else {
+                    match &event.logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            let overlay = match &mut self.state {
+                                AppState::Capturing(o) => o,
+                                _ => return,
+                            };
+                            if overlay.selected_index.is_some() {
+                                overlay.selected_index = None;
+                                overlay.select_drag_start = None;
+                                self.needs_redraw = true;
+                            } else {
+                                self.close_overlay();
+                                return;
+                            }
+                        }
+                        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
+                            let overlay = match &mut self.state {
+                                AppState::Capturing(o) => o,
+                                _ => return,
+                            };
+                            if let Some(idx) = overlay.selected_index {
+                                if idx < overlay.annotations.len() {
+                                    let removed = overlay.annotations.remove(idx);
+                                    record_undo(
+                                        &mut overlay.undo_stack,
+                                        &mut overlay.redo_stack,
+                                        UndoAction::Delete(idx, removed),
+                                    );
+                                    overlay.selected_index = None;
+                                    overlay.sync_step_counter();
+                                    self.needs_redraw = true;
+                                }
+                            }
+                        }
+                        Key::Named(NamedKey::Enter) if has_selection => {
+                            // Quick copy — same path as Ctrl+C / the Copy button,
+                            // annotations included, clipboard work off-thread.
+                            self.do_copy();
+                            return;
+                        }
+                        _ => {}
+                    }
                 }
             }
 
@@ -1702,6 +1865,9 @@ impl ApplicationHandler for App {
                     self.window_rects.clear();
                     self.needs_redraw = true;
                     tracing::info!("Window captured");
+                    if overlay.selection.is_some() && self.config.general.finish_on_release {
+                        self.do_copy();
+                    }
                     return;
                 }
 
@@ -1932,13 +2098,20 @@ impl ApplicationHandler for App {
                 if overlay.is_selecting {
                     overlay.is_selecting = false;
                     // Finalize selection — ensure minimum size
+                    let mut drawn = false;
                     if let Some(start) = overlay.drag_start.take() {
                         let sel = Selection::from_points(start, pos);
                         if sel.width > 2.0 && sel.height > 2.0 {
                             overlay.selection = Some(sel);
+                            drawn = true;
                         }
                     }
                     self.needs_redraw = true;
+                    if drawn && self.config.general.finish_on_release {
+                        // "Copy as soon as a region is drawn": skip markup.
+                        self.do_copy();
+                        return;
+                    }
                 } else if overlay.drag_zone.is_some() {
                     overlay.drag_zone = None;
                 } else {
@@ -2084,22 +2257,75 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.process_tray_events(event_loop);
 
-        // Drain ALL pending hotkey events, not just one per wakeup
-        while let Ok(event) = global_hotkey::GlobalHotKeyEvent::receiver().try_recv() {
-            if Some(event.id) == self.hotkey_id {
-                tracing::info!("Global hotkey pressed — triggering capture");
-                self.trigger_capture(event_loop);
+        // Settings lost focus while listening: stop, so the hotkeys work again.
+        let mut blur_deadline = None;
+        if let Some(t) = self.settings_blur_at {
+            let deadline = t + SETTINGS_BLUR_GRACE;
+            if Instant::now() >= deadline {
+                self.settings_blur_at = None;
+                if let Some(sw) = self.settings_window.as_mut() {
+                    if sw.view.stop_listening() {
+                        sw.window.request_redraw();
+                    }
+                }
+            } else {
+                blur_deadline = Some(deadline);
+            }
+        }
+
+        // While Settings is listening for a new combination, give it every
+        // key: release the OS registrations, take them back afterwards.
+        let listening = self
+            .settings_window
+            .as_ref()
+            .is_some_and(|sw| sw.view.editing().is_some());
+        if listening {
+            self.hotkeys.suspend();
+        } else if self.hotkeys.is_suspended() {
+            self.hotkeys.resume();
+        }
+
+        // Drain ALL pending hotkey events; key-repeat collapses to one press.
+        let now = Instant::now();
+        while let Ok(event) = self.hotkey_rx.try_recv() {
+            tracing::debug!("hotkey event {:?}", event);
+            match self.hotkeys.handle(&event, now) {
+                Some(KeyId::Region) => {
+                    tracing::info!("Region hotkey pressed");
+                    self.request_capture(event_loop, CaptureKind::Region);
+                }
+                Some(KeyId::Screenshot) => {
+                    tracing::info!("Screenshot hotkey pressed");
+                    self.request_capture(event_loop, CaptureKind::Screenshot);
+                }
+                _ => {}
+            }
+        }
+
+        // Results from capture workers.
+        while let Ok((spec, monitor)) = self.jobs_rx.try_recv() {
+            self.jobs_pending = self.jobs_pending.saturating_sub(1);
+            if let Some(spec) = spec {
+                self.feedback(event_loop, spec, monitor);
             }
         }
 
         // Apply async folder-picker results for the settings window.
         if let Some(ref mut sw) = self.settings_window {
-            if sw.poll_browse() {
+            if sw.view.poll_browse() {
                 sw.window.request_redraw();
             }
         }
 
-        // Update countdown overlay
+        let mut wake: Option<Instant> = None;
+        let mut wake_at = |t: Instant| {
+            wake = Some(wake.map_or(t, |w: Instant| w.min(t)));
+        };
+        if let Some(t) = blur_deadline {
+            wake_at(t);
+        }
+
+        // Countdown before a delayed capture.
         if let Some(ref mut cd) = self.countdown {
             let now = Instant::now();
             if cd.tick(now) {
@@ -2107,63 +2333,97 @@ impl ApplicationHandler for App {
                 // before the screenshot is taken.
                 cd.hide();
                 self.countdown = None;
-                // Schedule capture 300ms from now — gives the OS time to
-                // fully remove the countdown window from the screen
-                self.capture_at = Some(now + Duration::from_millis(300));
+                self.capture_at
+                    .push_back((now + Duration::from_millis(300), CaptureKind::Region));
             } else {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(cd.next_tick()));
+                wake_at(cd.next_tick());
             }
         }
 
-        if let Some(capture_time) = self.capture_at {
-            if Instant::now() >= capture_time {
-                self.capture_at = None;
-                self.trigger_capture(event_loop);
-            } else {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(capture_time));
-            }
-        } else if !self.needs_redraw {
-            // Wake exactly at toast expiry to clear it — don't re-render before
-            if let AppState::Capturing(ref overlay) = self.state {
-                if let Some(until) = overlay.toast_until {
-                    if Instant::now() >= until {
-                        self.needs_redraw = true; // expired — render to clear it
-                    } else {
-                        event_loop.set_control_flow(ControlFlow::WaitUntil(until));
-                    }
+        if let Some(&(when, kind)) = self.capture_at.front() {
+            if Instant::now() >= when {
+                if self.toast.take().is_some() {
+                    // A result popup appeared while this capture waited;
+                    // give the compositor time to remove it too.
+                    let later = Instant::now() + TOAST_CLEAR_DELAY;
+                    self.capture_at[0].0 = later;
+                    wake_at(later);
+                } else if self.overlay_window.is_some() {
+                    // The overlay from an earlier press is open: a region
+                    // would be lost behind it and a screenshot would show it.
+                    self.capture_at.pop_front();
                 } else {
-                    event_loop.set_control_flow(ControlFlow::Wait);
+                    self.capture_at.pop_front();
+                    match kind {
+                        CaptureKind::Region => self.trigger_capture(event_loop),
+                        CaptureKind::Screenshot => self.do_screenshot(event_loop),
+                    }
+                    if let Some(&(next, _)) = self.capture_at.front() {
+                        wake_at(next);
+                    }
                 }
             } else {
-                event_loop.set_control_flow(ControlFlow::Wait);
+                wake_at(when);
             }
+        }
+
+        // The popup closes itself.
+        if let Some(until) = self.toast.as_ref().map(|t| t.until()) {
+            if Instant::now() >= until {
+                self.toast = None;
+            } else {
+                wake_at(until);
+            }
+        }
+
+        // The overlay's own in-place message expires.
+        if let AppState::Capturing(ref overlay) = self.state {
+            if let Some(until) = overlay.toast_until {
+                if Instant::now() >= until {
+                    self.needs_redraw = true;
+                } else {
+                    wake_at(until);
+                }
+            }
+        }
+
+        // `screen-mark capture` (interactive): quit once the overlay is gone
+        // and its copy/save has finished and been reported.
+        if self.cli_only
+            && !self.immediate_capture
+            && self.overlay_window.is_none()
+            && self.jobs_pending == 0
+            && self.toast.is_none()
+            && self.capture_at.is_empty()
+        {
+            event_loop.exit();
+            return;
         }
 
         // Frame rate cap: only render if enough time has passed since last frame
         if self.needs_redraw {
             let now = Instant::now();
-            let elapsed = now.duration_since(self.last_render);
-            if elapsed >= FRAME_INTERVAL {
+            if now.duration_since(self.last_render) >= FRAME_INTERVAL {
                 self.render();
                 self.last_render = now;
             } else {
-                // Schedule wake-up for next frame
-                let next_frame = self.last_render + FRAME_INTERVAL;
-                event_loop.set_control_flow(ControlFlow::WaitUntil(next_frame));
+                wake_at(self.last_render + FRAME_INTERVAL);
             }
         }
 
         // While a folder-picker dialog is open we must self-schedule wakeups —
-        // the dialog produces no winit events. This is set LAST so the idle
-        // ControlFlow::Wait above can't overwrite it (last write wins).
+        // the dialog produces no winit events.
         if self
             .settings_window
             .as_ref()
-            .is_some_and(|sw| sw.browse_pending())
+            .is_some_and(|sw| sw.view.browse_pending())
         {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(
-                Instant::now() + Duration::from_millis(100),
-            ));
+            wake_at(Instant::now() + Duration::from_millis(100));
+        }
+
+        match wake {
+            Some(t) => event_loop.set_control_flow(ControlFlow::WaitUntil(t)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 }
@@ -2180,11 +2440,10 @@ fn run_tray_app(config: Config) {
             if let Ok(m) = CreateMutexW(None, false, w!("screen-mark.SingleInstance")) {
                 if GetLastError() == ERROR_ALREADY_EXISTS {
                     let _ = windows::Win32::Foundation::CloseHandle(m);
-                    let _ = notify_rust::Notification::new()
-                        .summary("screen-mark")
-                        .body("screen-mark is already running in the system tray")
-                        .timeout(3000)
-                        .show();
+                    screen_mark::notify::system(
+                        "screen-mark",
+                        "screen-mark is already running in the system tray",
+                    );
                     return;
                 }
                 // Mutex handle is Copy — kernel keeps it alive for the process lifetime
@@ -2200,7 +2459,9 @@ fn run_tray_app(config: Config) {
             std::process::exit(1);
         }
     };
+    screen_mark::notify::register_app_id();
     let mut app = App::new(config);
+    app.set_proxy(event_loop.create_proxy());
     if let Err(e) = event_loop.run_app(&mut app) {
         screen_mark::installer::show_error(&format!("Event loop error: {e}"));
         std::process::exit(1);
@@ -2216,6 +2477,7 @@ fn run_tray_app_with_immediate_capture(config: Config) {
         }
     };
     let mut app = App::new(config);
+    app.set_proxy(event_loop.create_proxy());
     app.immediate_capture = true;
     app.cli_only = true;
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -2300,13 +2562,22 @@ fn main() {
     tracing_subscriber::fmt::init();
     tracing::info!("screen-mark starting");
 
-    // Set Windows Application User Model ID so toast notifications display
     #[cfg(target_os = "windows")]
     {
-        use windows::core::w;
+        use windows::core::HSTRING;
+        use windows::Win32::UI::HiDpi::{
+            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
         use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
         unsafe {
-            let _ = SetCurrentProcessExplicitAppUserModelID(w!("screen-mark.screen-mark"));
+            // Physical pixels everywhere, including `capture --clipboard`,
+            // which never creates a winit event loop (winit would set this).
+            // Without it a 150%-scaled screen is captured at 2/3 size.
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            // Same id the notification registration uses (notify::APP_ID).
+            let _ = SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(
+                screen_mark::notify::APP_ID,
+            ));
         }
     }
 
@@ -2339,8 +2610,9 @@ fn main() {
 
             let config = Config::load();
             tracing::info!(
-                "Config loaded: hotkey={}, color={}, thickness={}",
-                config.hotkey.capture,
+                "Config loaded: region={}, screenshot={}, color={}, thickness={}",
+                config.hotkey.region,
+                config.hotkey.screenshot,
                 config.general.default_color,
                 config.general.default_thickness
             );

@@ -13,19 +13,21 @@ Windows: download `screen-mark-vX.Y.Z-windows-x64.msi` (installer) or `.zip` (po
 cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked
 ```
 
-I wanted a screenshot tool that starts in under a second, draws an arrow without a round trip through a web view, and leaves no background service I didn't ask for. This is that: `winit` for windows, `tiny-skia` for drawing, a tray icon, one global hotkey, and a TOML file. It assumes Windows 10 or later; the Linux build captures under X11 and nothing else yet.
+I wanted a screenshot tool that starts in under a second, draws an arrow without a round trip through a web view, and leaves no background service I didn't ask for. This is that: `winit` for windows, `tiny-skia` for drawing, a tray icon, two global hotkeys, and a TOML file. It assumes Windows 10 or later; the Linux build captures under X11 and nothing else yet.
 
 ## What's in it
 
 | Command | Does |
 |---|---|
-| `screen-mark` | Starts in the tray; `Ctrl+Shift+S` opens the capture overlay |
+| `screen-mark` | Starts in the tray. `Ctrl+PrintScreen` saves a PNG of the monitor under the mouse and copies it, in one press. `Ctrl+Shift+S` opens the capture overlay |
 | `screen-mark capture --clipboard` | Captures the full screen to the clipboard, no UI |
 | `screen-mark capture --save out.png` | Captures the full screen to a file, no UI |
 | `screen-mark capture --delay 5` | Waits five seconds, then opens the overlay; add a flag above to skip it |
 | `screen-mark install` / `uninstall` | Copies the exe to AppData with a Start Menu entry and PATH; the portable exe asks before doing this |
 
-In the overlay: drag for a region, click for a window, `Escape` cancels. `Enter` or `Ctrl+C` copies the selection with annotations, `Ctrl+S` saves, `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, scroll wheel changes tool size. From the toolbar: pin the capture as an always-on-top window, upload it anonymously to Imgur (needs your own client ID, see Configuration), or run Windows OCR on it and copy the text. The last 20 captures are kept in a History window.
+The one-press screenshot saves to `Pictures\screen-mark` (or the folder you pick in Settings › Capture) under a timestamped name that never overwrites, then puts the same image on the clipboard. A small popup in the corner says what happened; click it to open the folder with the file selected. Settings › Capture can switch the popup to system notifications or turn it off; errors always show.
+
+In the overlay: drag for a region, click for a window, `Escape` cancels. `Enter` or `Ctrl+C` copies the selection with annotations, `Ctrl+S` saves, `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, scroll wheel changes tool size. From the toolbar: pin the capture as an always-on-top window, upload it anonymously to Imgur (needs your own client ID, see Configuration), or run Windows OCR on it and copy the text. The last 20 captures are kept in a History window. Two switches in Settings › Capture change the region flow: *Save a file every time I copy* writes a PNG alongside each copy, and *Copy as soon as a region is drawn* skips the markup toolbar so drag-and-release is the whole job.
 
 Fourteen annotation tools, one key each:
 
@@ -39,13 +41,15 @@ Fourteen annotation tools, one key each:
 | `L` | Line | `I` | Eyedropper |
 | `P` | Pencil | `M` | Measurement |
 
+Every key above is rebindable in Settings › Keys: click a binding, press the new combination. `Esc` cancels, `Backspace` leaves it unbound. Settings refuses a combination another binding already uses, one Windows keeps for itself (`Alt+Tab`, `Win+L`, ...), or a global hotkey another app has registered, and says which. A global hotkey with a single modifier (`Alt+S`) or a bare F-key is allowed, with a note that other apps won't see it while screen-mark runs. Pin, upload, and OCR start unbound and can be given keys there too.
+
 Dark and light modes, switched in Settings › General or with `theme` in the config file. Five annotation color presets (red, blue, green, yellow, mauve) or any `#rrggbb`.
 
 ## Tested on
 
 - Windows 11 · Rust stable — my daily machine, every release used in anger before tagging
 - Windows Server 2025 · Rust stable — CI (`windows-latest`) builds, tests, and runs clippy on every push
-- Ubuntu 24.04 · X11 · Rust stable — CI (`ubuntu-latest`) builds and tests; region capture checked by hand
+- Ubuntu 24.04 · X11 · Rust stable — CI (`ubuntu-latest`) builds and tests, then drives the real binary on a virtual X display with two monitors (`tests/e2e/`): hotkeys, popups, rebinding, the tray menu, unwritable folders, system notifications
 - *Not* tested: Wayland — the backend is a stub and capture does nothing. macOS — does not build.
 
 ## Known issues
@@ -56,22 +60,41 @@ Dark and light modes, switched in Settings › General or with `theme` in the co
 - Imgur upload ships with no client ID. Register one at api.imgur.com and set it in Settings or `SCREEN_MARK_IMGUR_CLIENT_ID`.
 - Window capture skips cloaked UWP windows on purpose; some Store apps will not be selectable by click.
 - CLI `--delay` waits silently. The on-screen countdown only appears for tray-menu delays.
+- `Ctrl+PrintScreen` is already taken on some machines (Greenshot, ShareX, and some keyboard utilities register it). screen-mark shows a popup when a hotkey can't be registered; click it to pick another in Settings › Keys.
+- Linux: `screen-mark capture --clipboard` loses the image when the command exits, because X11 clipboards live in the owning process. The tray app's clipboard is fine.
 
 ## Configuration
 
-Written on first run to `%APPDATA%\screen-mark\config.toml` (Windows) or `~/.config/screen-mark/config.toml` (Linux). Every key is optional; missing keys take the defaults below.
+Written on first run to `%APPDATA%\screen-mark\config.toml` (Windows) or `~/.config/screen-mark/config.toml` (Linux). Every key is optional; missing keys take the defaults below. Set `SCREEN_MARK_HOME` to keep the config and history in one folder of your choosing instead (portable use; the test suite uses it too).
 
 ```toml
 [general]
 default_color = "blue"        # red | blue | green | yellow | mauve | "#rrggbb"
 default_thickness = 3.0
-save_directory = ""           # set a path to save silently; empty opens a PNG/JPEG/WebP dialog
+save_directory = ""           # where captures go; empty means Pictures/screen-mark
+ask_where_to_save = true      # Ctrl+S opens a PNG/JPEG/WebP dialog; false saves straight to the folder
+                              # (left unset, it asks only while save_directory is empty)
+copy_also_saves = false       # every copy also writes a PNG to save_directory
+finish_on_release = false     # copy as soon as a region is drawn, no markup toolbar
+screenshot_area = "monitor"   # monitor (under the mouse) | all
+notifications = "toast"       # toast | system | off; errors always show
 imgur_client_id = ""          # or SCREEN_MARK_IMGUR_CLIENT_ID in the environment
 history_enabled = true
 theme = "dark"                # dark | light
 
-[hotkey]
-capture = "Ctrl+Shift+S"      # also rebindable in Settings > General
+[hotkey]                      # global; "" leaves one unbound
+region = "Ctrl+Shift+S"       # was `capture` in 2.0; that name still works
+screenshot = "Ctrl+PrintScreen"
+
+[keys]                        # while marking up
+copy = "Ctrl+C"
+save = "Ctrl+S"
+undo = "Ctrl+Z"
+redo = "Ctrl+Shift+Z"
+select_all = "Ctrl+A"
+pin = ""
+ocr = ""
+upload = ""
 
 [shortcuts]                   # one key per tool; defaults are the table above
 select = "v"

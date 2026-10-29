@@ -44,6 +44,24 @@ jobs:
       - name: Format check
         run: cargo fmt --check
 
+  e2e-linux:
+    name: End-to-end (Linux, virtual display)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libxkbcommon-dev libwayland-dev libglib2.0-dev libgtk-3-dev libxdo-dev
+          xvfb openbox stalonetray xdotool xclip imagemagick x11-xserver-utils x11-utils
+          python3-pil python3-xlib python3-dbus python3-gi dbus-x11 libayatana-appindicator3-1
+      - name: Build
+        run: cargo build
+      - name: Usage tests
+        run: bash tests/e2e/run.sh target/debug/screen-mark
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-24.04

@@ -223,8 +223,9 @@ pub fn uninstall() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        // 1. Remove autostart
+        // 1. Remove autostart and the notification app id
         let _ = crate::autostart::set_enabled(false);
+        crate::notify::unregister_app_id();
 
         // 2. Remove from PATH
         let dest_dir = install_dir()?;

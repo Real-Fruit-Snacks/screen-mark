@@ -1,6 +1,31 @@
 # Changelog
 
-All notable changes to HydroShot will be documented in this file.
+All notable changes to screen-mark will be documented in this file.
+
+## [2.1.0] - 2026-10-29
+
+### Added
+- **One-press screenshot.** `Ctrl+PrintScreen` captures the monitor under the mouse, saves a PNG to the captures folder, and copies it to the clipboard. Settings › Capture switches it to all monitors. Presses made while a capture is still finishing are queued, not dropped, and file names never overwrite each other (`_2`, `_3`, ...).
+- **Popups after a capture.** A small corner popup on the monitor under the mouse says what was saved and copied, with a thumbnail; click it to open the folder with the file selected. It never takes focus and is kept out of the next capture. Settings › Capture can use system notifications instead, or turn them off; errors always show.
+- **Save when copying.** *Save a file every time I copy* writes a PNG next to each copy from the editor.
+- **Skip the markup toolbar.** *Copy as soon as a region is drawn* finishes a region capture on mouse release (and a window capture on click).
+- **Every key is rebindable** in a new Settings › Keys tab: both global hotkeys, the editor's copy / save / undo / redo / select-all, pin, OCR and upload (unbound by default), and all fourteen tool keys. Click a binding and press the keys; `Esc` cancels, `Backspace` unbinds. Duplicates, combinations the OS keeps for itself, keys that can't work in their place (a bare letter as a global hotkey, `Enter` as a tool key, punctuation as a global hotkey), and global hotkeys another app holds are refused with the reason; a global hotkey that hides a common shortcut from other apps (`Alt+S`, a bare `F5`) is allowed with a note. Letters follow the keyboard layout; digits and punctuation follow the key position. Everything a 2.0 config could hold keeps working, including tool keys set to any typed character.
+- If a global hotkey can't be registered at startup, a popup names it; click it to land on that key in Settings.
+- Tray menu: *Screenshot (save + copy)* and *Open captures folder*, and both capture items show their current hotkey.
+- `SCREEN_MARK_HOME` keeps config and history in one folder (portable use).
+- `tests/e2e/`: end-to-end usage tests that drive the real binary on a virtual X display with two monitors, a tray host, and a fake notification server. Run in CI on Ubuntu.
+
+### Changed
+- `[hotkey] capture` is now `[hotkey] region`; the old name is still read. New `screenshot`, `[keys]`, and `[general]` keys are listed in the README.
+- With no save folder set, the one-press screenshot and save-on-copy use `Pictures/screen-mark`. `Ctrl+S` still asks where to save until you choose a folder, as before; the new *Save asks where to save* switch makes that a choice.
+- Save errors say why first ("permission denied", "disk full", "a file is in the way") and then the path.
+- Windows: the process is per-monitor DPI aware, and notifications carry the screen-mark name and icon.
+
+### Fixed
+- Linux: the tray icon panicked at startup ("GTK has not been initialized"); it now runs on its own GTK thread.
+- Linux: global hotkey presses waited for the next window event before anything happened.
+- Linux: holding a global hotkey down fired it again on every key repeat.
+- Linux: an image copied from the tray app could drop off the clipboard, because the clipboard handle was closed after each copy.
 
 ## [2.0.0] - 2026-10-26
 

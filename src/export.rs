@@ -239,21 +239,167 @@ fn offset_annotation(annotation: &Annotation, dx: f32, dy: f32) -> Annotation {
     }
 }
 
+/// The process keeps one clipboard handle for its whole life. On X11 and
+/// Wayland the copying program has to stay around to hand the image to
+/// whoever pastes it; arboard does that from a background thread for as long
+/// as a `Clipboard` exists. A handle dropped right after `set_image` (what
+/// 2.0 did, on a worker thread) meant the image was gone before anyone
+/// could paste it, unless a clipboard manager grabbed it first.
+static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
+
 /// Copy pixel data to the system clipboard.
 ///
 /// `pixels` is straight RGBA8 data.
 pub fn copy_to_clipboard(pixels: &[u8], width: u32, height: u32) -> Result<(), String> {
     use arboard::{Clipboard, ImageData};
 
-    let mut clipboard = Clipboard::new().map_err(|e| format!("Failed to open clipboard: {e}"))?;
-    let img = ImageData {
-        width: width as usize,
-        height: height as usize,
-        bytes: std::borrow::Cow::Borrowed(pixels),
-    };
-    clipboard
-        .set_image(img)
-        .map_err(|e| format!("Failed to copy image to clipboard: {e}"))
+    let expected = width as usize * height as usize * 4;
+    if width == 0 || height == 0 || pixels.len() < expected {
+        return Err(format!(
+            "Nothing to copy ({width}x{height}, {} bytes)",
+            pixels.len()
+        ));
+    }
+    let mut guard = CLIPBOARD.lock().unwrap_or_else(|p| p.into_inner());
+    // One retry with a fresh handle: on Windows another program can hold
+    // the clipboard open for a moment, and a stale X11 connection fails once.
+    let mut last_err = String::new();
+    for _ in 0..2 {
+        if guard.is_none() {
+            match Clipboard::new() {
+                Ok(c) => *guard = Some(c),
+                Err(e) => {
+                    last_err = format!("Failed to open clipboard: {e}");
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                    continue;
+                }
+            }
+        }
+        let img = ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: std::borrow::Cow::Borrowed(&pixels[..expected]),
+        };
+        match guard.as_mut().expect("set above").set_image(img) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = format!("Failed to copy image to clipboard: {e}");
+                *guard = None;
+                std::thread::sleep(std::time::Duration::from_millis(60));
+            }
+        }
+    }
+    Err(last_err)
+}
+
+/// Encode RGBA8 pixels as PNG bytes.
+pub fn encode_png(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let expected = width as usize * height as usize * 4;
+    if pixels.len() < expected {
+        return Err("invalid image data".into());
+    }
+    let img = image::RgbaImage::from_raw(width, height, pixels[..expected].to_vec())
+        .ok_or("invalid image data")?;
+    let mut out = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// The file name screen-mark gives a capture taken at `when`, before any
+/// `_2`, `_3` suffix: `screen-mark_2026-10-28_143012.png`.
+pub fn capture_file_stem(when: chrono::DateTime<chrono::Local>) -> String {
+    when.format("screen-mark_%Y-%m-%d_%H%M%S").to_string()
+}
+
+/// Write `png` into `dir` under `<stem>.png`, or `<stem>_2.png`,
+/// `<stem>_3.png`, ... if that name is taken. Never overwrites: the file is
+/// created with `create_new`, so two captures in the same second (or two
+/// screen-mark processes) can't clobber each other. Creates `dir`.
+pub fn write_unique(
+    dir: &std::path::Path,
+    stem: &str,
+    png: &[u8],
+) -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).map_err(|e| {
+        // Windows reports a file sitting where a folder should be as
+        // "already exists" or "not found", not "not a directory".
+        let reason = if file_in_the_way(dir) {
+            "a file is in the way".to_string()
+        } else {
+            short_io_error(&e)
+        };
+        format!("Can't create the folder ({reason}): {}", dir.display())
+    })?;
+    for n in 1..=9999u32 {
+        let name = if n == 1 {
+            format!("{stem}.png")
+        } else {
+            format!("{stem}_{n}.png")
+        };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(png).and_then(|_| f.flush()) {
+                    drop(f);
+                    let _ = std::fs::remove_file(&path);
+                    return Err(format!(
+                        "Can't write the file ({}): {}",
+                        short_io_error(&e),
+                        path.display()
+                    ));
+                }
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(format!(
+                    "Can't write in the folder ({}): {}",
+                    short_io_error(&e),
+                    dir.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "{} already has 9999 captures named {stem}",
+        dir.display()
+    ))
+}
+
+/// Encode and save a capture into `dir` with a timestamped, unique name.
+pub fn save_capture(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    dir: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let png = encode_png(pixels, width, height)?;
+    write_unique(dir, &capture_file_stem(chrono::Local::now()), &png)
+}
+
+/// True if `dir` or one of its parents exists as something other than a
+/// folder.
+fn file_in_the_way(dir: &std::path::Path) -> bool {
+    dir.ancestors()
+        .any(|p| !p.as_os_str().is_empty() && p.exists() && !p.is_dir())
+}
+
+fn short_io_error(e: &std::io::Error) -> String {
+    use std::io::ErrorKind::*;
+    match e.kind() {
+        PermissionDenied => "permission denied".into(),
+        NotFound => "not found".into(),
+        NotADirectory => "a file is in the way".into(),
+        StorageFull => "disk full".into(),
+        ReadOnlyFilesystem => "read-only drive".into(),
+        _ => e.to_string(),
+    }
 }
 
 /// Save pixel data to an image file (accepts owned Vec to avoid redundant copy).
@@ -270,18 +416,11 @@ pub fn save_to_file(
     height: u32,
     default_dir: Option<&std::path::Path>,
 ) -> Result<Option<String>, String> {
-    let now = chrono::Local::now();
-    let default_name = now.format("screen-mark_%Y-%m-%d_%H%M%S.png").to_string();
+    let default_name = format!("{}.png", capture_file_stem(chrono::Local::now()));
 
     if let Some(dir) = default_dir {
-        // Auto-save (no dialog) — always PNG
-        std::fs::create_dir_all(dir)
-            .map_err(|e| format!("Failed to create save directory: {e}"))?;
-        let path = dir.join(&default_name);
-        let img = image::RgbaImage::from_raw(width, height, pixels)
-            .ok_or_else(|| "Failed to create image from pixel data".to_string())?;
-        img.save(&path)
-            .map_err(|e| format!("Failed to save image: {e}"))?;
+        // Auto-save (no dialog), always PNG, never overwriting.
+        let path = save_capture(&pixels, width, height, dir)?;
         return Ok(Some(path.to_string_lossy().into_owned()));
     }
 

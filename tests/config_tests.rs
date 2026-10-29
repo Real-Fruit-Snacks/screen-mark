@@ -7,7 +7,7 @@ fn default_config_has_correct_values() {
     assert_eq!(cfg.general.default_color, "red");
     assert_eq!(cfg.general.default_thickness, 3.0);
     assert_eq!(cfg.general.save_directory, "");
-    assert_eq!(cfg.hotkey.capture, "Ctrl+Shift+S");
+    assert_eq!(cfg.hotkey.region, "Ctrl+Shift+S");
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn serialize_roundtrip_via_toml() {
         deserialized.general.save_directory,
         cfg.general.save_directory
     );
-    assert_eq!(deserialized.hotkey.capture, cfg.hotkey.capture);
+    assert_eq!(deserialized.hotkey.region, cfg.hotkey.region);
 }
 
 #[test]
@@ -74,7 +74,7 @@ arrow = "q"
     assert_eq!(cfg.general.default_color, "blue");
     assert_eq!(cfg.general.default_thickness, 3.0); // default filled in
     assert!(cfg.general.history_enabled); // default filled in
-    assert_eq!(cfg.hotkey.capture, "Ctrl+Shift+S"); // whole section defaulted
+    assert_eq!(cfg.hotkey.region, "Ctrl+Shift+S"); // whole section defaulted
     assert_eq!(cfg.shortcuts.arrow, "q");
     assert_eq!(cfg.shortcuts.rectangle, "r"); // sibling key defaulted
     assert!(cfg.toolbar.select);
@@ -84,7 +84,7 @@ arrow = "q"
 fn empty_config_parses_as_defaults() {
     let cfg: Config = toml::from_str("").expect("empty config should parse");
     assert_eq!(cfg.general.default_color, "red");
-    assert_eq!(cfg.hotkey.capture, "Ctrl+Shift+S");
+    assert_eq!(cfg.hotkey.region, "Ctrl+Shift+S");
 }
 
 #[test]

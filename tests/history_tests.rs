@@ -3,7 +3,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// Skip history tests if no config directory is available (e.g., headless CI).
+/// Every test runs against a throwaway SCREEN_MARK_HOME, never the real
+/// history (which these tests fill and prune).
 fn require_config_dir() -> bool {
+    let home = std::env::temp_dir().join(format!("sm-history-tests-{}", std::process::id()));
+    std::env::set_var("SCREEN_MARK_HOME", &home);
     screen_mark::history::history_dir().is_some()
 }
 

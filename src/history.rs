@@ -5,6 +5,9 @@ const MAX_HISTORY: usize = 20;
 /// History lives in the LOCAL data dir (e.g. %LocalAppData%) — captures can be
 /// sensitive and must not sync into roaming profiles.
 pub fn history_dir() -> Option<PathBuf> {
+    if let Some(home) = crate::config::home_override() {
+        return Some(home.join("history"));
+    }
     dirs::data_local_dir().map(|d| d.join("screen-mark").join("history"))
 }
 
@@ -23,6 +26,9 @@ fn legacy_history_dirs() -> Vec<PathBuf> {
 
 /// Move any PNGs from the legacy locations into `dir` (best effort, once).
 fn migrate_legacy(dir: &std::path::Path) {
+    if crate::config::home_override().is_some() {
+        return;
+    }
     for legacy in legacy_history_dirs() {
         migrate_one(&legacy, dir);
     }

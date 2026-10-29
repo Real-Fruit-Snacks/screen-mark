@@ -28,6 +28,16 @@ cargo fmt --check
 ```
 
 - Add a test under `tests/` for behaviour you changed. Most modules already have one.
+- If you touched hotkeys, popups, the tray, Settings, or the capture flow, run the end-to-end tests too. They start the real binary on a virtual X display (Linux only) and need a few extra packages:
+
+  ```sh
+  sudo apt-get install -y xvfb openbox stalonetray xdotool xclip imagemagick x11-xserver-utils \
+      x11-utils python3-pil python3-xlib python3-dbus python3-gi dbus-x11 libayatana-appindicator3-1
+  cargo build
+  tests/e2e/run.sh                      # all scenarios
+  tests/e2e/run.sh target/debug/screen-mark rebind   # just the ones whose name contains "rebind"
+  ```
+
 - Add a line to `CHANGELOG.md` under an `Unreleased` heading.
 - Update the README if a command, key, or config key changed.
 - Keep platform-specific code behind `cfg` in `src/capture/` or the module that already owns it.
