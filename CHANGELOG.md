@@ -2,6 +2,11 @@
 
 All notable changes to screen-mark will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Capture the last region again.** `Shift+PrintScreen` captures the same area of the screen as the last region capture, with no overlay, then saves a PNG and copies it like the one-press screenshot. The area is remembered when a region is copied, saved, pinned, uploaded or read with OCR, and kept across restarts in `last-region.txt` next to the history. With no region yet, or if that area is on no screen any more (a monitor was unplugged), a popup says so. Rebindable in Settings › Keys as `[hotkey] last_region`, and in the tray menu as *Last region again (save + copy)*.
+
 ## [2.1.0] - 2026-10-29
 
 ### Added

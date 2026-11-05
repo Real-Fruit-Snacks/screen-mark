@@ -15,6 +15,7 @@ pub mod hotkey;
 pub mod icons;
 pub mod installer;
 pub mod keys;
+pub mod last_region;
 pub mod notify;
 pub mod ocr;
 pub mod overlay;

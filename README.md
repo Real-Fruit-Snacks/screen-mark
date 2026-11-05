@@ -19,13 +19,13 @@ I wanted a screenshot tool that starts in under a second, draws an arrow without
 
 | Command | Does |
 |---|---|
-| `screen-mark` | Starts in the tray. `Ctrl+PrintScreen` saves a PNG of the monitor under the mouse and copies it, in one press. `Ctrl+Shift+S` opens the capture overlay |
+| `screen-mark` | Starts in the tray. `Ctrl+PrintScreen` saves a PNG of the monitor under the mouse and copies it, in one press. `Ctrl+Shift+S` opens the capture overlay. `Shift+PrintScreen` captures the last region again |
 | `screen-mark capture --clipboard` | Captures the full screen to the clipboard, no UI |
 | `screen-mark capture --save out.png` | Captures the full screen to a file, no UI |
 | `screen-mark capture --delay 5` | Waits five seconds, then opens the overlay; add a flag above to skip it |
 | `screen-mark install` / `uninstall` | Copies the exe to AppData with a Start Menu entry and PATH; the portable exe asks before doing this |
 
-The one-press screenshot saves to `Pictures\screen-mark` (or the folder you pick in Settings › Capture) under a timestamped name that never overwrites, then puts the same image on the clipboard. A small popup in the corner says what happened; click it to open the folder with the file selected. Settings › Capture can switch the popup to system notifications or turn it off; errors always show.
+The one-press screenshot saves to `Pictures\screen-mark` (or the folder you pick in Settings › Capture) under a timestamped name that never overwrites, then puts the same image on the clipboard. `Shift+PrintScreen` does the same for the area of the last region you captured, so a window or a chart you capture every day is one key; screen-mark remembers that area across restarts. A small popup in the corner says what happened; click it to open the folder with the file selected. Settings › Capture can switch the popup to system notifications or turn it off; errors always show.
 
 In the overlay: drag for a region, click for a window, `Escape` cancels. `Enter` or `Ctrl+C` copies the selection with annotations, `Ctrl+S` saves, `Ctrl+Z` / `Ctrl+Shift+Z` undo and redo, scroll wheel changes tool size. From the toolbar: pin the capture as an always-on-top window, upload it anonymously to Imgur (needs your own client ID, see Configuration), or run Windows OCR on it and copy the text. The last 20 captures are kept in a History window. Two switches in Settings › Capture change the region flow: *Save a file every time I copy* writes a PNG alongside each copy, and *Copy as soon as a region is drawn* skips the markup toolbar so drag-and-release is the whole job.
 
@@ -60,7 +60,7 @@ Dark and light modes, switched in Settings › General or with `theme` in the co
 - Imgur upload ships with no client ID. Register one at api.imgur.com and set it in Settings or `SCREEN_MARK_IMGUR_CLIENT_ID`.
 - Window capture skips cloaked UWP windows on purpose; some Store apps will not be selectable by click.
 - CLI `--delay` waits silently. The on-screen countdown only appears for tray-menu delays.
-- `Ctrl+PrintScreen` is already taken on some machines (Greenshot, ShareX, and some keyboard utilities register it). screen-mark shows a popup when a hotkey can't be registered; click it to pick another in Settings › Keys.
+- `Ctrl+PrintScreen` and `Shift+PrintScreen` are already taken on some machines (Greenshot, ShareX, and some keyboard utilities register them; Greenshot uses `Shift+PrintScreen` for its own last region). screen-mark shows a popup when a hotkey can't be registered; click it to pick another in Settings › Keys.
 - Linux: `screen-mark capture --clipboard` loses the image when the command exits, because X11 clipboards live in the owning process. The tray app's clipboard is fine.
 
 ## Configuration
@@ -85,6 +85,7 @@ theme = "dark"                # dark | light
 [hotkey]                      # global; "" leaves one unbound
 region = "Ctrl+Shift+S"       # was `capture` in 2.0; that name still works
 screenshot = "Ctrl+PrintScreen"
+last_region = "Shift+PrintScreen"  # the last region's area again, saved and copied
 
 [keys]                        # while marking up
 copy = "Ctrl+C"

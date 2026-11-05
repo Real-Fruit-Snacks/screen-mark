@@ -19,6 +19,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEv
 pub enum Item {
     Region,
     Screenshot,
+    LastRegion,
     Window,
     Delay(u32),
     OpenFolder,
@@ -39,20 +40,24 @@ pub enum TrayEvent {
 
 const REGION_LABEL: &str = "Capture region";
 const SCREENSHOT_LABEL: &str = "Screenshot (save + copy)";
+const LAST_REGION_LABEL: &str = "Last region again (save + copy)";
 
 /// The menu and icon. Owned by the thread that created them.
 struct TrayState {
     region_item: MenuItem,
     screenshot_item: MenuItem,
+    last_region_item: MenuItem,
     autostart_check: CheckMenuItem,
     _tray: tray_icon::TrayIcon,
 }
 
 impl TrayState {
-    fn set_bindings(&self, region: &str, screenshot: &str) {
+    fn set_bindings(&self, region: &str, screenshot: &str, last_region: &str) {
         self.region_item.set_text(with_key(REGION_LABEL, region));
         self.screenshot_item
             .set_text(with_key(SCREENSHOT_LABEL, screenshot));
+        self.last_region_item
+            .set_text(with_key(LAST_REGION_LABEL, last_region));
     }
     fn set_autostart(&self, on: bool) {
         self.autostart_check.set_checked(on);
@@ -83,6 +88,7 @@ fn build(
     let mut ids: Vec<(MenuId, Item)> = Vec::new();
     let region_item = MenuItem::new(REGION_LABEL, true, None);
     let screenshot_item = MenuItem::new(SCREENSHOT_LABEL, true, None);
+    let last_region_item = MenuItem::new(LAST_REGION_LABEL, true, None);
     let autostart_check =
         CheckMenuItem::new("Start on login", true, crate::autostart::is_enabled(), None);
     let plain = |text: &str| MenuItem::new(text, true, None);
@@ -98,6 +104,7 @@ fn build(
     for (item, kind) in [
         (&region_item, Item::Region),
         (&screenshot_item, Item::Screenshot),
+        (&last_region_item, Item::LastRegion),
         (&window_item, Item::Window),
         (&d3, Item::Delay(3)),
         (&d5, Item::Delay(5)),
@@ -114,8 +121,14 @@ fn build(
 
     let sep = || PredefinedMenuItem::separator();
     let err = |e: tray_icon::menu::Error| e.to_string();
-    menu.append_items(&[&region_item, &screenshot_item, &window_item, &d3, &d5, &d10])
-        .map_err(err)?;
+    menu.append_items(&[
+        &region_item,
+        &screenshot_item,
+        &last_region_item,
+        &window_item,
+    ])
+    .map_err(err)?;
+    menu.append_items(&[&d3, &d5, &d10]).map_err(err)?;
     menu.append(&sep()).map_err(err)?;
     menu.append_items(&[&folder, &history]).map_err(err)?;
     menu.append(&autostart_check).map_err(err)?;
@@ -157,6 +170,7 @@ fn build(
     Ok(TrayState {
         region_item,
         screenshot_item,
+        last_region_item,
         autostart_check,
         _tray: tray,
     })
@@ -169,17 +183,21 @@ pub struct TrayHandle {
 }
 
 impl TrayHandle {
-    /// Show the current hotkeys next to the two capture items.
-    pub fn set_bindings(&self, region: &str, screenshot: &str) {
+    /// Show the current hotkeys next to the three hotkey capture items.
+    pub fn set_bindings(&self, region: &str, screenshot: &str, last_region: &str) {
         #[cfg(not(target_os = "linux"))]
-        self.state.set_bindings(region, screenshot);
+        self.state.set_bindings(region, screenshot, last_region);
         #[cfg(target_os = "linux")]
         {
-            let (r, s) = (region.to_string(), screenshot.to_string());
+            let (r, s, l) = (
+                region.to_string(),
+                screenshot.to_string(),
+                last_region.to_string(),
+            );
             gtk::glib::idle_add_once(move || {
                 GTK_TRAY.with(|t| {
                     if let Some(t) = t.borrow().as_ref() {
-                        t.set_bindings(&r, &s);
+                        t.set_bindings(&r, &s, &l);
                     }
                 })
             });

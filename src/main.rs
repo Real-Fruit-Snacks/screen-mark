@@ -76,6 +76,9 @@ struct App {
     countdown: Option<Countdown>,
     window_capture_mode: bool,
     window_rects: Vec<window_detect::WinRect>,
+    /// Where the last region capture was on screen, for the last-region
+    /// hotkey. Loaded at startup, saved whenever a region capture is used.
+    last_region: Option<display::Rect>,
     settings_window: Option<SettingsWindow>,
     history_window: Option<HistoryWindow>,
 }
@@ -97,6 +100,8 @@ enum CaptureKind {
     Region,
     /// One press: grab, save, copy.
     Screenshot,
+    /// One press: grab the area of the last region capture again, save, copy.
+    LastRegion,
 }
 
 /// Tool index (`ShortcutsConfig::entries()` order) to tool.
@@ -171,6 +176,7 @@ impl App {
             countdown: None,
             window_capture_mode: false,
             window_rects: Vec::new(),
+            last_region: screen_mark::last_region::load(),
             settings_window: None,
             history_window: None,
         }
@@ -180,10 +186,10 @@ impl App {
     /// registered is reported (popup, Settings shows why); it no longer
     /// silently falls back to a default.
     fn apply_hotkeys(&mut self, event_loop: &ActiveEventLoop, announce: bool) {
-        let wanted = vec![
-            (KeyId::Region, self.config.hotkey.region.clone()),
-            (KeyId::Screenshot, self.config.hotkey.screenshot.clone()),
-        ];
+        let wanted: Vec<(KeyId, String)> = KeyId::GLOBALS
+            .iter()
+            .map(|id| (*id, self.config.binding(*id)))
+            .collect();
         self.hotkeys.apply(&wanted);
         let problems: Vec<(KeyId, String)> = wanted
             .iter()
@@ -197,7 +203,8 @@ impl App {
         if !problems.is_empty() {
             let title = match problems.as_slice() {
                 [(KeyId::Region, _)] => "Region hotkey isn't working",
-                [(_, _)] => "Screenshot hotkey isn't working",
+                [(KeyId::Screenshot, _)] => "Screenshot hotkey isn't working",
+                [(_, _)] => "Last-region hotkey isn't working",
                 _ => "Hotkeys aren't working",
             };
             let detail = problems
@@ -211,7 +218,8 @@ impl App {
             self.feedback(event_loop, spec, None);
         } else if announce {
             let mut parts = Vec::new();
-            for (id, raw) in &wanted {
+            // The popup has room for two; the tray menu shows the third.
+            for (id, raw) in wanted.iter().filter(|(id, _)| *id != KeyId::LastRegion) {
                 if self.hotkeys.status(*id) == Status::Active {
                     let what = if *id == KeyId::Region {
                         "region"
@@ -243,7 +251,11 @@ impl App {
 
     fn update_tray_labels(&self) {
         if let Some(ref tray) = self.tray {
-            tray.set_bindings(&self.config.hotkey.region, &self.config.hotkey.screenshot);
+            tray.set_bindings(
+                &self.config.hotkey.region,
+                &self.config.hotkey.screenshot,
+                &self.config.hotkey.last_region,
+            );
         }
     }
 
@@ -321,6 +333,7 @@ impl App {
             match kind {
                 CaptureKind::Region => self.trigger_capture(event_loop),
                 CaptureKind::Screenshot => self.do_screenshot(event_loop),
+                CaptureKind::LastRegion => self.do_last_region(event_loop),
             }
             return;
         }
@@ -337,21 +350,44 @@ impl App {
         self.capture_at.push_back((when, kind));
     }
 
-    /// One press: capture the monitor under the mouse (or all monitors),
-    /// save it to the save folder and copy it.
-    fn do_screenshot(&mut self, event_loop: &ActiveEventLoop) {
+    /// Grab the whole virtual desktop. A failure is reported in a popup.
+    fn grab_desktop(&mut self, event_loop: &ActiveEventLoop) -> Option<capture::CapturedScreen> {
         let shot = capture::create_capturer()
             .map_err(|e| e.to_string())
             .and_then(|c| c.capture_all_screens().map_err(|e| e.to_string()))
             .and_then(|s| s.into_iter().next().ok_or_else(|| "no screen".to_string()));
-        let full = match shot {
-            Ok(f) => f,
+        match shot {
+            Ok(full) => Some(full),
             Err(e) => {
                 tracing::error!("Screenshot failed: {e}");
                 let spec = Spec::new(Kind::Error, "Couldn't capture the screen", e);
                 self.feedback(event_loop, spec, None);
-                return;
+                None
             }
+        }
+    }
+
+    /// Save `shot` to the save folder and copy it, on a worker thread.
+    fn save_and_copy(&mut self, shot: capture::CapturedScreen, monitor: Option<Monitor>) {
+        let folder = self.config.save_folder();
+        let history = self.config.general.history_enabled;
+        self.spawn_job(monitor, move || {
+            Some(screen_mark::actions::finish_capture(
+                &shot.pixels,
+                shot.width,
+                shot.height,
+                Some(&folder),
+                true,
+                history,
+            ))
+        });
+    }
+
+    /// One press: capture the monitor under the mouse (or all monitors),
+    /// save it to the save folder and copy it.
+    fn do_screenshot(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(full) = self.grab_desktop(event_loop) else {
+            return;
         };
         let monitor = pointer_monitor();
         let shot = if self.config.screenshot_all_monitors() {
@@ -368,18 +404,67 @@ impl App {
             shot.x_offset,
             shot.y_offset
         );
-        let folder = self.config.save_folder();
-        let history = self.config.general.history_enabled;
-        self.spawn_job(monitor, move || {
-            Some(screen_mark::actions::finish_capture(
-                &shot.pixels,
-                shot.width,
-                shot.height,
-                Some(&folder),
-                true,
-                history,
-            ))
-        });
+        self.save_and_copy(shot, monitor);
+    }
+
+    /// One press: capture the area of the last region capture again, then
+    /// save it and copy it, like the one-press screenshot. Says so if no
+    /// region has been captured yet, or if that area is on no screen now.
+    fn do_last_region(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(rect) = self.last_region else {
+            let region = &self.config.hotkey.region;
+            let detail = if keys::Binding::parse(region).ok().flatten().is_some() {
+                format!(
+                    "Capture one with {} first",
+                    screen_mark::settings_ui::display_binding(region)
+                )
+            } else {
+                "Capture one from the tray menu first".to_string()
+            };
+            let spec = Spec::new(Kind::Info, "No region to capture again", detail);
+            self.feedback(event_loop, spec, None);
+            return;
+        };
+        let Some(full) = self.grab_desktop(event_loop) else {
+            return;
+        };
+        let Some(shot) = display::crop(&full, rect) else {
+            let detail = format!(
+                "{} \u{00d7} {} at {}, {} isn't on a screen now",
+                rect.w, rect.h, rect.x, rect.y
+            );
+            let spec = Spec::new(Kind::Error, "The last region is off screen", detail);
+            self.feedback(event_loop, spec, None);
+            return;
+        };
+        tracing::info!(
+            "Last region {}x{} at ({}, {})",
+            shot.width,
+            shot.height,
+            shot.x_offset,
+            shot.y_offset
+        );
+        let monitor = display::monitor_at(
+            &display::monitors(),
+            rect.x.saturating_add((rect.w / 2) as i32),
+            rect.y.saturating_add((rect.h / 2) as i32),
+        );
+        self.save_and_copy(shot, monitor);
+    }
+
+    /// Remember where the current selection is on screen, for the
+    /// last-region hotkey. Called when a capture is used, not cancelled.
+    fn remember_region(&mut self) {
+        let AppState::Capturing(ref overlay) = self.state else {
+            return;
+        };
+        let Some(rect) = overlay.selection_on_screen() else {
+            return;
+        };
+        self.last_region = Some(rect);
+        if let Err(e) = screen_mark::last_region::save(rect) {
+            tracing::warn!("Couldn't remember the last region: {e}");
+        }
     }
 
     fn trigger_capture(&mut self, event_loop: &ActiveEventLoop) {
@@ -539,7 +624,7 @@ impl App {
             }
         };
 
-        let statuses = [KeyId::Region, KeyId::Screenshot]
+        let statuses = KeyId::GLOBALS
             .into_iter()
             .map(|id| (id, self.hotkeys.status(id)))
             .collect();
@@ -660,6 +745,7 @@ impl App {
             None
         };
         if let Some((pixels, w, h)) = copy_data {
+            self.remember_region();
             let history = self.config.general.history_enabled;
             let save_to = self
                 .config
@@ -689,6 +775,7 @@ impl App {
         let Some((pixels, w, h)) = save_data else {
             return;
         };
+        self.remember_region();
         let history = self.config.general.history_enabled;
         let ask = self.config.ask_where_to_save();
         let folder = self.config.save_folder();
@@ -767,6 +854,7 @@ impl App {
         };
 
         if let Some((pixels, w, h)) = upload_data {
+            self.remember_region();
             if self.config.general.history_enabled {
                 let _ = screen_mark::history::save_to_history(&pixels, w, h);
             }
@@ -812,6 +900,7 @@ impl App {
         };
 
         if let Some((cropped, w, h)) = ocr_data {
+            self.remember_region();
             self.close_overlay();
             self.spawn_job(None, move || {
                 Some(match screen_mark::ocr::extract_text(&cropped, w, h) {
@@ -838,6 +927,7 @@ impl App {
     }
 
     fn do_pin(&mut self, event_loop: &ActiveEventLoop) {
+        self.remember_region();
         if let AppState::Capturing(ref overlay) = self.state {
             if let Some((pixels, w, h)) = overlay.flattened_selection() {
                 if self.config.general.history_enabled {
@@ -879,6 +969,9 @@ impl App {
                 Item::Region => self.request_capture_in(event_loop, CaptureKind::Region, menu_gone),
                 Item::Screenshot => {
                     self.request_capture_in(event_loop, CaptureKind::Screenshot, menu_gone)
+                }
+                Item::LastRegion => {
+                    self.request_capture_in(event_loop, CaptureKind::LastRegion, menu_gone)
                 }
                 Item::Window => {
                     self.window_capture_mode = true;
@@ -2298,6 +2391,10 @@ impl ApplicationHandler for App {
                     tracing::info!("Screenshot hotkey pressed");
                     self.request_capture(event_loop, CaptureKind::Screenshot);
                 }
+                Some(KeyId::LastRegion) => {
+                    tracing::info!("Last-region hotkey pressed");
+                    self.request_capture(event_loop, CaptureKind::LastRegion);
+                }
                 _ => {}
             }
         }
@@ -2357,6 +2454,7 @@ impl ApplicationHandler for App {
                     match kind {
                         CaptureKind::Region => self.trigger_capture(event_loop),
                         CaptureKind::Screenshot => self.do_screenshot(event_loop),
+                        CaptureKind::LastRegion => self.do_last_region(event_loop),
                     }
                     if let Some(&(next, _)) = self.capture_at.front() {
                         wake_at(next);
@@ -2610,9 +2708,10 @@ fn main() {
 
             let config = Config::load();
             tracing::info!(
-                "Config loaded: region={}, screenshot={}, color={}, thickness={}",
+                "Config loaded: region={}, screenshot={}, last_region={}, color={}, thickness={}",
                 config.hotkey.region,
                 config.hotkey.screenshot,
+                config.hotkey.last_region,
                 config.general.default_color,
                 config.general.default_thickness
             );

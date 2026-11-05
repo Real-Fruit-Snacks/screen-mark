@@ -249,6 +249,7 @@ def test_startup_registers_hotkeys_and_shows_a_popup(app):
     log = app.log()
     assert "Global hotkey Region registered: Ctrl+Shift+S" in log, log
     assert "Global hotkey Screenshot registered: Ctrl+PrintScreen" in log, log
+    app.wait_log("Global hotkey LastRegion registered: Shift+PrintScreen")
     assert "Tray icon created" in log, "tray failed to start: " + log
     wait_for(lambda: windows(POPUP_NAME), what="startup popup")
     w = windows(POPUP_NAME)[0]
@@ -343,6 +344,41 @@ def test_region_escape_copies_nothing(app):
     time.sleep(0.5)
     assert clipboard_hash() == before
     assert app.files() == []
+
+
+def test_last_region_hotkey_captures_the_same_area_again(app):
+    app.ready()
+    app.wait_log("Global hotkey LastRegion registered: Shift+PrintScreen")
+    time.sleep(0.4)
+    # Nothing captured yet: a popup says so, and no file is written.
+    key("shift+Print")
+    app.wait_log("Last-region hotkey pressed")
+    wait_for(lambda: windows(POPUP_NAME), what="nothing-to-repeat popup")
+    never(lambda: app.files(), 1.0, what="a file before any region")
+    # Capture a region and copy it.
+    key("ctrl+shift+s")
+    wait_for(overlays, what="overlay")
+    time.sleep(0.3)
+    drag(200, 150, 600, 450)
+    time.sleep(0.2)
+    key("Return")
+    wait_for(clipboard_png, 4, what="region on clipboard")
+    wait_for(lambda: not overlays(), what="overlay closed")
+    time.sleep(0.6)
+    # The hotkey captures that area again, without the overlay: saved and copied.
+    clear_clipboard()
+    key("shift+Print")
+    files = wait_for(app.files, 5, what="saved file")
+    assert not overlays(), "the overlay should not open"
+    img = Image.open(os.path.join(app.shots, files[0])).convert("RGB")
+    assert abs(img.size[0] - 400) <= 2 and abs(img.size[1] - 300) <= 2, img.size
+    assert close(img.getpixel((10, 10)), LEFT_RGB), img.getpixel((10, 10))
+    clip = wait_for(clipboard_png, 3, what="image on clipboard")
+    assert clip.size == img.size, (clip.size, img.size)
+    # Remembered for the next start.
+    with open(os.path.join(app.root, "data", "screen-mark", "last-region.txt")) as f:
+        x, y, w, h = (int(v) for v in f.read().split())
+    assert abs(x - 200) <= 2 and abs(y - 150) <= 2 and (w, h) == img.size, (x, y, w, h)
 
 
 def test_finish_on_release_and_copy_also_saves(app):
@@ -640,7 +676,7 @@ def tray_menu(app, index):
 
 
 def open_settings_from_tray(app):
-    tray_menu(app, 10)  # Settings
+    tray_menu(app, 11)  # Settings
     sw = wait_for(lambda: windows("screen-mark Settings"), 5, what="settings window")[0]
     sh("xdotool", "windowactivate", "--sync", sw, check=False)
     sh("xdotool", "windowfocus", "--sync", sw, check=False)
@@ -658,6 +694,7 @@ CASES = [
     (test_holding_the_hotkey_captures_once, DEFAULT),
     (test_region_drag_then_enter_copies, DEFAULT),
     (test_region_escape_copies_nothing, DEFAULT),
+    (test_last_region_hotkey_captures_the_same_area_again, DEFAULT),
     (test_finish_on_release_and_copy_also_saves,
      '[general]\nfinish_on_release = true\ncopy_also_saves = true\n'),
     (test_rebinding_in_settings_takes_effect_immediately, DEFAULT),

@@ -25,6 +25,9 @@ fn d_region() -> String {
 fn d_screenshot() -> String {
     "Ctrl+PrintScreen".into()
 }
+fn d_last_region() -> String {
+    "Shift+PrintScreen".into()
+}
 fn d_screenshot_area() -> String {
     "monitor".into()
 }
@@ -132,6 +135,10 @@ pub struct HotkeyConfig {
     /// One press: capture, save a PNG and copy it.
     #[serde(default = "d_screenshot")]
     pub screenshot: String,
+    /// One press: capture the area of the last region capture again, save
+    /// a PNG and copy it.
+    #[serde(default = "d_last_region")]
+    pub last_region: String,
 }
 
 impl Default for HotkeyConfig {
@@ -139,6 +146,7 @@ impl Default for HotkeyConfig {
         Self {
             region: d_region(),
             screenshot: d_screenshot(),
+            last_region: d_last_region(),
         }
     }
 }
@@ -604,6 +612,7 @@ impl Config {
         match id {
             KeyId::Region => self.hotkey.region.clone(),
             KeyId::Screenshot => self.hotkey.screenshot.clone(),
+            KeyId::LastRegion => self.hotkey.last_region.clone(),
             KeyId::Copy => self.keys.copy.clone(),
             KeyId::Save => self.keys.save.clone(),
             KeyId::Undo => self.keys.undo.clone(),
@@ -626,6 +635,7 @@ impl Config {
         match id {
             KeyId::Region => self.hotkey.region = value,
             KeyId::Screenshot => self.hotkey.screenshot = value,
+            KeyId::LastRegion => self.hotkey.last_region = value,
             KeyId::Copy => self.keys.copy = value,
             KeyId::Save => self.keys.save = value,
             KeyId::Undo => self.keys.undo = value,

@@ -759,6 +759,8 @@ pub fn caution(b: Binding, scope: Scope) -> Option<String> {
 pub enum KeyId {
     Region,
     Screenshot,
+    /// Capture the area of the last region capture again, without the overlay.
+    LastRegion,
     Copy,
     Save,
     Undo,
@@ -774,7 +776,7 @@ pub enum KeyId {
 impl KeyId {
     pub fn scope(self) -> Scope {
         match self {
-            KeyId::Region | KeyId::Screenshot => Scope::Global,
+            KeyId::Region | KeyId::Screenshot | KeyId::LastRegion => Scope::Global,
             KeyId::Tool(_) => Scope::Tool,
             _ => Scope::Editor,
         }
@@ -784,6 +786,7 @@ impl KeyId {
         match self {
             KeyId::Region => "Capture a region",
             KeyId::Screenshot => "Screenshot: save + copy",
+            KeyId::LastRegion => "Last region: save + copy",
             KeyId::Copy => "Copy",
             KeyId::Save => "Save",
             KeyId::Undo => "Undo",
@@ -801,6 +804,7 @@ impl KeyId {
         match self {
             KeyId::Region => "Ctrl+Shift+S",
             KeyId::Screenshot => "Ctrl+PrintScreen",
+            KeyId::LastRegion => "Shift+PrintScreen",
             KeyId::Copy => "Ctrl+C",
             KeyId::Save => "Ctrl+S",
             KeyId::Undo => "Ctrl+Z",
@@ -811,11 +815,13 @@ impl KeyId {
         }
     }
 
+    /// The global hotkeys, in Settings order.
+    pub const GLOBALS: [KeyId; 3] = [KeyId::Region, KeyId::Screenshot, KeyId::LastRegion];
+
     /// Every bindable id, globals first, then editor actions, then tools.
     pub fn all() -> Vec<KeyId> {
-        let mut v = vec![
-            KeyId::Region,
-            KeyId::Screenshot,
+        let mut v = KeyId::GLOBALS.to_vec();
+        v.extend([
             KeyId::Copy,
             KeyId::Save,
             KeyId::Undo,
@@ -824,7 +830,7 @@ impl KeyId {
             KeyId::Pin,
             KeyId::Ocr,
             KeyId::Upload,
-        ];
+        ]);
         v.extend((0..TOOL_LABELS.len()).map(KeyId::Tool));
         v
     }

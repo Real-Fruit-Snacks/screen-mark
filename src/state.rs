@@ -226,6 +226,22 @@ impl OverlayState {
         Some((pixels, r.w, r.h))
     }
 
+    /// Where the selection is on screen, in virtual-desktop pixels, clipped
+    /// to the capture. `None` without a selection or with zero area.
+    pub fn selection_on_screen(&self) -> Option<crate::display::Rect> {
+        let sel = self.selection.as_ref()?;
+        let r = sel.clamped(self.screenshot.width, self.screenshot.height);
+        if r.w == 0 || r.h == 0 {
+            return None;
+        }
+        Some(crate::display::Rect::new(
+            self.screenshot.x_offset + r.x as i32,
+            self.screenshot.y_offset + r.y as i32,
+            r.w,
+            r.h,
+        ))
+    }
+
     /// Crop the current selection WITHOUT annotations (raw screenshot pixels).
     pub fn raw_selection(&self) -> Option<(Vec<u8>, u32, u32)> {
         let sel = self.selection.as_ref()?;

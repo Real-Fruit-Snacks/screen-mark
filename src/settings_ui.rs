@@ -472,9 +472,9 @@ impl SettingsView {
             return Outcome::Redraw; // keep listening
         }
         if id.scope() == Scope::Global {
-            // A combination screen-mark itself already uses for the *other*
+            // A combination screen-mark itself already uses for another
             // hotkey is a conflict, reported below, not "taken".
-            let ours = [KeyId::Region, KeyId::Screenshot].iter().any(|o| {
+            let ours = KeyId::GLOBALS.iter().any(|o| {
                 *o != id && Binding::parse(&self.config.binding(*o)).ok().flatten() == Some(binding)
             });
             if !ours {
@@ -1074,7 +1074,7 @@ impl SettingsView {
         // While listening, a problem with the currently typed attempt is in
         // the footer; otherwise show the hovered row's problem, if any.
         if self.editing.is_none() && self.message.is_none() {
-            let status_problem = [KeyId::Region, KeyId::Screenshot].iter().find_map(|id| {
+            let status_problem = KeyId::GLOBALS.iter().find_map(|id| {
                 self.statuses
                     .get(id)
                     .and_then(|st| st.describe(&display_binding(&self.config.binding(*id))))
