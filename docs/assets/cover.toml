@@ -1,14 +1,11 @@
 # Cover + social preview. Regenerate with Real-Fruit-Snacks/rfs-brand:
 #   python3 ../rfs-brand/tools/make-cover.py docs/assets/cover.toml
+# Layout v2 (BRAND.md section 7): name, rule, the README one-liner, and one panel.
 name        = "screen-mark"
-description = "Screenshot capture and annotation in pure Rust."
-bullets = [
-  "Region, window, or timed capture",
-  "14 annotation tools, undo and redo",
-  "Pin, copy, save, OCR, Imgur",
-  "Windows and Linux (X11)",
-]
+description = "Screenshot capture and annotation in pure Rust"   # README line 1
 
+# The tool draws itself: the capture overlay with a selection, three of its
+# annotation tools and the tool bar (drawn at 528x448 for layout v2).
 [panel]
 kind = "art"
 file = "cover-art.svg"
