@@ -76,14 +76,14 @@
         <p class="lede">Screenshot capture and annotation in pure Rust, for Windows and for Linux under&nbsp;X11.</p>
         <p class="how"><kbd>Ctrl+PrtSc</kbd> saves and copies the monitor under your mouse. <kbd>Ctrl+Shift+S</kbd> opens an overlay like the one on this page: drag a region, draw on it, press <kbd>Enter</kbd> to copy.</p>
         <div class="get">
-          <a class="btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.1.0/screen-mark-v2.1.0-windows-x64.msi">Download for Windows</a>
+          <a class="btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.msi">Download for Windows</a>
           <svg class="note-arrow" viewBox="0 0 132 64" aria-hidden="true" focusable="false">
             <path class="note-arrow__shaft" d="M124 8 L15.6 52.1"/>
             <path class="note-arrow__head" d="M6 56 L13.4 46.5 L17.9 57.6 Z"/>
           </svg>
           <span class="marker marker--static" aria-hidden="true">1</span>
         </div>
-        <p class="meta">v2.1.0 for Windows 10 and 11 &middot; .msi installer, or the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.1.0/screen-mark-v2.1.0-windows-x64.zip">portable .zip</a> &middot; <a href="#install">Linux and cargo</a></p>
+        <p class="meta">v2.2.0 for Windows 10 and 11 &middot; .msi installer, or the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.zip">portable .zip</a> &middot; <a href="#install">Linux and cargo</a></p>
       </div>
 
       <div class="toolbar" role="toolbar" aria-label="Capture toolbar, a working copy of the app's" data-toolbar>
@@ -123,7 +123,7 @@
 
   <section class="hotkeys" id="how" aria-labelledby="how-h">
     <div class="wrap">
-      <h2 id="how-h">Two hotkeys</h2>
+      <h2 id="how-h">Three hotkeys</h2>
 
       <div class="hk">
         <p class="caps"><kbd>Ctrl</kbd><kbd>PrtSc</kbd></p>
@@ -154,7 +154,16 @@
         </div>
       </div>
 
-      <p class="aside">Both hotkeys are rebindable in Settings › Keys. If another app already holds one (Greenshot, ShareX and some keyboard utilities register <kbd>Ctrl+PrtSc</kbd>), a popup names the key; click it to pick another.</p>
+      <div class="hk">
+        <p class="caps"><kbd>Shift</kbd><kbd>PrtSc</kbd></p>
+        <div class="hk__body">
+          <h3>The last region, again</h3>
+          <p>Captures the same area as your last region, with no overlay, then saves and copies it like <kbd>Ctrl+PrtSc</kbd>. A window or a chart you capture every day becomes one key.</p>
+          <p>screen-mark remembers the area across restarts. If it is on no screen any more, because a monitor was unplugged, a popup says so.</p>
+        </div>
+      </div>
+
+      <p class="aside">All three are rebindable in Settings › Keys. If another app already holds one (Greenshot, ShareX and some keyboard utilities register <kbd>Ctrl+PrtSc</kbd> or <kbd>Shift+PrtSc</kbd>), a popup names the key; click it to pick another.</p>
     </div>
   </section>
 
@@ -251,17 +260,17 @@
         <ul class="files">
           <li>
             <span class="files__os">Windows</span>
-            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.1.0/screen-mark-v2.1.0-windows-x64.msi">screen-mark-v2.1.0-windows-x64.msi</a>
+            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.msi">screen-mark-v2.2.0-windows-x64.msi</a>
             <span class="files__note">Installer. A 1.x MSI is upgraded in place.</span>
           </li>
           <li>
             <span class="files__os">Windows</span>
-            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.1.0/screen-mark-v2.1.0-windows-x64.zip">screen-mark-v2.1.0-windows-x64.zip</a>
+            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.zip">screen-mark-v2.2.0-windows-x64.zip</a>
             <span class="files__note">Portable. The exe asks before it installs itself to AppData.</span>
           </li>
           <li>
             <span class="files__os">Linux</span>
-            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.1.0/screen-mark-v2.1.0-linux-x64.tar.gz">screen-mark-v2.1.0-linux-x64.tar.gz</a>
+            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-linux-x64.tar.gz">screen-mark-v2.2.0-linux-x64.tar.gz</a>
             <span class="files__note">X11 only, experimental. Extract, <code>chmod +x screen-mark</code>, run it.</span>
           </li>
         </ul>
@@ -318,7 +327,7 @@
 
 <footer class="foot">
   <div class="wrap foot__in">
-    <p class="foot__name">screen-mark 2.1.0 &middot; MIT &middot; an <a href="https://github.com/Real-Fruit-Snacks">RFS</a> tool</p>
+    <p class="foot__name">screen-mark 2.2.0 &middot; MIT &middot; an <a href="https://github.com/Real-Fruit-Snacks">RFS</a> tool</p>
     <p class="foot__links"><a href="https://github.com/Real-Fruit-Snacks/screen-mark">Source</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases">Releases</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/CHANGELOG.md">Changelog</a></p>
     <p class="foot__colophon">Set in Bricolage Grotesque and Azeret Mono. Toolbar icons from Lucide, the same set the app draws.</p>
   </div>

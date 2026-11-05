@@ -5,7 +5,7 @@ The page is a screen that screen-mark is in the middle of capturing. The first s
 app's real capture overlay: dimmed 40%, an Ember selection around the download block with its live
 `W × H` readout, the 24-button toolbar under it, and an arrow already drawn. Visitors can drag their
 own selection and draw on the page with the app's keys. Everything below the first screen is plain,
-specific and set like a well-made manual. The visitor should leave knowing the two hotkeys and the
+specific and set like a well-made manual. The visitor should leave knowing the three hotkeys and the
 fourteen tool keys, and having already used the overlay once.
 
 ## Audience and primary action
