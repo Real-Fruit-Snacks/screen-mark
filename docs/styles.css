@@ -483,6 +483,7 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 .install__all b { color: var(--rfs-text); font-weight: 650; }
 .cargo { margin-top: var(--space-xl); }
 .cargo > p { margin-bottom: var(--space-2xs); }
+.cargo > .cargo__offline { margin: var(--space-s) 0 0; color: var(--rfs-mute); }
 .cmd { display: flex; align-items: center; gap: var(--space-2xs); background: var(--rfs-code-bg); border: 1px solid var(--rfs-line); border-radius: 6px; padding-right: var(--space-2xs); }
 .cmd pre { flex: 1; min-width: 0; margin: 0; padding: 0.95em 1.1em; white-space: pre-wrap; font-size: 0.85rem; line-height: 1.5; }
 .cmd code { font-size: inherit; overflow-wrap: anywhere; }

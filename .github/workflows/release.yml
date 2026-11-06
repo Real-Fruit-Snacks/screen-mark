@@ -1,91 +1,209 @@
 name: Release
 
+# A release carries everything an offline user needs:
+# - the Windows MSI and zip, and the Linux tar.gz. Each holds the README, changelog,
+#   licence and THIRD-PARTY-LICENSES.txt, and the Windows exe has no Visual C++
+#   runtime dependency.
+# - screen-mark-vX.Y.Z-source-vendored.tar.gz: the source plus every crate it
+#   depends on. It builds with `cargo build --offline`, and this workflow checks that
+#   with networking switched off.
+# - screen-mark-vX.Y.Z-website.zip: the website with the release files inside it.
+# - SHA256SUMS.txt for all of the above.
+#
+# Pushing a v* tag publishes a release. Running the workflow by hand
+# (workflow_dispatch) builds and packages everything as workflow artifacts and
+# publishes nothing, so it works as a dry run.
+
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+env:
+  # cargo-about writes THIRD-PARTY-LICENSES.txt. Pinned, with the checksums of its
+  # release archives from github.com/EmbarkStudios/cargo-about/releases.
+  CARGO_ABOUT_VERSION: 0.9.3
+  CARGO_ABOUT_SHA256_LINUX: 3ad1e94ea1e63d69d1961f4fb15ccbbe9575d906111f96d2cb4dce6df48f71b4
+  CARGO_ABOUT_SHA256_WINDOWS: 9e2942533ef1c592c4a70bdb384cae1550a3f5fc9ae40379b6662e3d2f16fe02
 
 jobs:
   build-windows:
     name: Build (Windows)
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Read the version
+        run: |
+          version="v$(sed -n 's/^version = "\(.*\)"\r\{0,1\}$/\1/p' Cargo.toml | head -n 1)"
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the Cargo.toml version, $version"; exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Build release
-        run: cargo build --release
+        run: cargo build --release --locked
+      - name: Check the exe needs no Visual C++ runtime
+        run: |
+          if grep -qai 'vcruntime140' target/release/screen-mark.exe; then
+            echo "::error::screen-mark.exe imports VCRUNTIME140.dll. The C runtime should be linked in (.cargo/config.toml)."; exit 1
+          fi
+      - name: Write third-party licences
+        run: |
+          name="cargo-about-$CARGO_ABOUT_VERSION-x86_64-pc-windows-msvc"
+          curl -sSfL -o about.tar.gz "https://github.com/EmbarkStudios/cargo-about/releases/download/$CARGO_ABOUT_VERSION/$name.tar.gz"
+          echo "$CARGO_ABOUT_SHA256_WINDOWS *about.tar.gz" | sha256sum -c -
+          mkdir -p ../about-tool && tar -xzf about.tar.gz -C ../about-tool && rm about.tar.gz
+          "../about-tool/$name/cargo-about.exe" generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.txt
       - name: Install cargo-wix
         run: cargo install cargo-wix
       - name: Build MSI installer
-        run: cargo wix --no-build --nocapture -o screen-mark-${{ github.ref_name }}-windows-x64.msi
+        run: cargo wix --no-build --nocapture -o "screen-mark-$VERSION-windows-x64.msi"
       - name: Package ZIP
-        run: |
-          New-Item -ItemType Directory -Force -Path release
-          Copy-Item target/release/screen-mark.exe release/
-          Compress-Archive -Path release/screen-mark.exe -DestinationPath screen-mark-${{ github.ref_name }}-windows-x64.zip -Force
         shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item target/release/screen-mark.exe, README.md, CHANGELOG.md, LICENSE, THIRD-PARTY-LICENSES.txt release/
+          Compress-Archive -Path release/* -DestinationPath "screen-mark-$env:VERSION-windows-x64.zip" -Force
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-binary
+          if-no-files-found: error
           path: |
-            screen-mark-*.zip
-            screen-mark-*.msi
+            screen-mark-*-windows-x64.zip
+            screen-mark-*-windows-x64.msi
 
   build-linux:
-    name: Build (Linux)
+    name: Build (Linux) and vendored source
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Read the version
+        run: |
+          version="v$(sed -n 's/^version = "\(.*\)"\r\{0,1\}$/\1/p' Cargo.toml | head -n 1)"
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the Cargo.toml version, $version"; exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libglib2.0-dev libgtk-3-dev libxdo-dev
       - name: Build release
-        run: cargo build --release
+        run: cargo build --release --locked
+      - name: Write third-party licences
+        run: |
+          name="cargo-about-$CARGO_ABOUT_VERSION-x86_64-unknown-linux-musl"
+          curl -sSfL -o about.tar.gz "https://github.com/EmbarkStudios/cargo-about/releases/download/$CARGO_ABOUT_VERSION/$name.tar.gz"
+          echo "$CARGO_ABOUT_SHA256_LINUX *about.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/about" && tar -xzf about.tar.gz -C "$RUNNER_TEMP/about" && rm about.tar.gz
+          "$RUNNER_TEMP/about/$name/cargo-about" generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.txt
       - name: Package
         run: |
           mkdir release
-          cp target/release/screen-mark release/
+          cp target/release/screen-mark README.md CHANGELOG.md LICENSE THIRD-PARTY-LICENSES.txt release/
           chmod +x release/screen-mark
-          tar -czf screen-mark-${{ github.ref_name }}-linux-x64.tar.gz -C release screen-mark
-
-      - name: Package website (self-contained offline hosting bundle)
+          tar -czf "screen-mark-$VERSION-linux-x64.tar.gz" -C release screen-mark README.md CHANGELOG.md LICENSE THIRD-PARTY-LICENSES.txt
+      - name: Package vendored source
         run: |
-          mkdir -p bundle/docs
-          cp -r docs/. bundle/docs/
-          cp .gitlab-ci.yml bundle/
-          zip -r screen-mark-${{ github.ref_name }}-website.zip bundle
-        # The bundle holds the whole static site (HTML, CSS, vendored
-        # IBM Plex fonts, SVGs) plus a GitLab Pages CI file,
-        # so it can be hosted anywhere — GitHub Pages, GitLab Pages, or an
-        # air-gapped web server — with no internet access required.
-
+          name="screen-mark-$VERSION"
+          mkdir -p "$RUNNER_TEMP/src"
+          git archive --format=tar --prefix="$name/" HEAD | tar -x -C "$RUNNER_TEMP/src"
+          cd "$RUNNER_TEMP/src/$name"
+          cargo vendor --locked vendor > "$RUNNER_TEMP/vendor.toml"
+          {
+            echo
+            echo "# Build from the crates in vendor/, with no network access:"
+            echo "#   cargo build --release --offline"
+            cat "$RUNNER_TEMP/vendor.toml"
+          } >> .cargo/config.toml
+          cp "$GITHUB_WORKSPACE/THIRD-PARTY-LICENSES.txt" .
+          {
+            echo "This source bundle was cut from $GITHUB_REF_NAME ($GITHUB_SHA)."
+            echo "The release binaries were built with:"
+            rustc --version
+            cargo --version
+          } > BUILT-WITH.txt
+          tar -czf "$GITHUB_WORKSPACE/$name-source-vendored.tar.gz" -C "$RUNNER_TEMP/src" "$name"
+      - name: Check the vendored source builds with no network
+        run: |
+          dir="$RUNNER_TEMP/offline-check"
+          mkdir -p "$dir/cargo-home"
+          tar -xzf "screen-mark-$VERSION-source-vendored.tar.gz" -C "$dir"
+          # A network namespace with no interfaces, and an empty cargo cache:
+          # the build can only use what's in the bundle.
+          sudo unshare --net -- sudo -u "$USER" env "PATH=$PATH" "HOME=$HOME" \
+            "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" "CARGO_HOME=$dir/cargo-home" \
+            bash -c "cd '$dir/screen-mark-$VERSION' && cargo build --release --offline --locked"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-binary
+          if-no-files-found: error
           path: |
-            screen-mark-*.tar.gz
-            screen-mark-*-website.zip
+            screen-mark-*-linux-x64.tar.gz
+            screen-mark-*-source-vendored.tar.gz
 
-  release:
-    name: Create Release
+  package:
+    name: Package website and checksums
     needs: [build-windows, build-linux]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: '*-binary'
           merge-multiple: true
+          path: dist
+      - name: Read the version
+        run: echo "VERSION=v$(sed -n 's/^version = "\(.*\)"\r\{0,1\}$/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_ENV"
+      - name: Package website (self-contained offline hosting bundle)
+        # The whole static site (HTML, CSS, JS, vendored fonts, images) plus a GitLab
+        # Pages CI file, so it can be hosted anywhere: GitHub Pages, GitLab Pages, or
+        # an air-gapped web server. docs/downloads/ holds this release's Windows and
+        # Linux files, and the page's download links are pointed at them.
+        run: |
+          mkdir -p bundle/docs/downloads
+          cp -r docs/. bundle/docs/
+          cp .gitlab-ci.yml bundle/
+          for f in windows-x64.msi windows-x64.zip linux-x64.tar.gz; do
+            cp "dist/screen-mark-$VERSION-$f" bundle/docs/downloads/
+          done
+          (cd bundle/docs/downloads && sha256sum screen-mark-* > SHA256SUMS.txt)
+          sed -i "s#https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/$VERSION/#downloads/#g" bundle/docs/index.html
+          if grep -q 'releases/download/' bundle/docs/index.html; then
+            echo "::error::docs/index.html still links to release downloads other than $VERSION. Update its links."; exit 1
+          fi
+          grep -q "downloads/screen-mark-$VERSION-windows-x64.msi" bundle/docs/index.html
+          zip -qr "dist/screen-mark-$VERSION-website.zip" bundle
+      - name: Write checksums
+        run: cd dist && sha256sum screen-mark-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          if-no-files-found: error
+          path: dist/*
+
+  release:
+    name: Create Release
+    needs: package
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
-            screen-mark-*.zip
-            screen-mark-*.tar.gz
-            screen-mark-*.msi
+            screen-mark-*
+            SHA256SUMS.txt
           generate_release_notes: true
           draft: false

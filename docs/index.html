@@ -78,14 +78,14 @@
         <p class="how"><kbd>Ctrl+PrtSc</kbd> saves and copies the monitor under your mouse. <kbd>Ctrl+Shift+S</kbd> opens an overlay like the one on this page: drag a region, draw on it, press <kbd>Enter</kbd> to copy.</p>
         <p class="meta phone-note">screen-mark runs on a computer, not a phone. The button downloads the Windows installer; open this page on your PC to run it.</p>
         <div class="get">
-          <a class="btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.msi">Download for Windows</a>
+          <a class="btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.1/screen-mark-v2.2.1-windows-x64.msi">Download for Windows</a>
           <svg class="note-arrow" viewBox="0 0 132 64" aria-hidden="true" focusable="false">
             <path class="note-arrow__shaft" d="M124 8 L15.6 52.1"/>
             <path class="note-arrow__head" d="M6 56 L13.4 46.5 L17.9 57.6 Z"/>
           </svg>
           <span class="marker marker--static" aria-hidden="true">1</span>
         </div>
-        <p class="meta"><span>v2.2.0 &middot; 64-bit Windows 10 and 11 (tested on 11) &middot; .msi installer, or the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.zip">portable .zip</a> &middot; MIT licence</span>
+        <p class="meta"><span>v2.2.1 &middot; 64-bit Windows 10 and 11 (tested on 11) &middot; .msi installer, or the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.1/screen-mark-v2.2.1-windows-x64.zip">portable .zip</a> &middot; MIT licence</span>
           <span>Windows may warn about an unknown publisher: choose More info, then Run anyway.</span>
           <span class="meta__alt">On Linux: <a href="#linux">the .tar.gz (X11 only, experimental)</a> &middot; <a href="#source">build from source</a></span></p>
       </div>
@@ -274,9 +274,9 @@
           <li>
             <span class="files__os">Windows 10 and 11</span>
             <div class="files__set">
-              <p><a class="btn files__btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.msi">Download the installer</a></p>
-              <p class="files__note"><span class="files__file">screen-mark-v2.2.0-windows-x64.msi</span>, with a Start menu entry. A 1.x MSI is upgraded in place.</p>
-              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.zip">screen-mark-v2.2.0-windows-x64.zip</a></p>
+              <p><a class="btn files__btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.1/screen-mark-v2.2.1-windows-x64.msi">Download the installer</a></p>
+              <p class="files__note"><span class="files__file">screen-mark-v2.2.1-windows-x64.msi</span>, with a Start menu entry. A 1.x MSI is upgraded in place.</p>
+              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.1/screen-mark-v2.2.1-windows-x64.zip">screen-mark-v2.2.1-windows-x64.zip</a></p>
               <p class="files__note">Portable. The exe asks before it installs itself to AppData.</p>
               <p class="files__note">Neither is code-signed yet, so Windows SmartScreen may stop the first run: choose <b>More info</b>, then <b>Run anyway</b>.</p>
             </div>
@@ -284,12 +284,12 @@
           <li id="linux">
             <span class="files__os">Linux</span>
             <div class="files__set">
-              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-linux-x64.tar.gz">screen-mark-v2.2.0-linux-x64.tar.gz</a></p>
+              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.1/screen-mark-v2.2.1-linux-x64.tar.gz">screen-mark-v2.2.1-linux-x64.tar.gz</a></p>
               <p class="files__note">X11 only (not Wayland), experimental. Built on Ubuntu 24.04; it needs GTK 3, libxdo and an AppIndicator library for the tray (on Ubuntu, <code>sudo apt install <span class="nowrap">libxdo3</span> <span class="nowrap">libayatana-appindicator3-1</span></code>). Extract, <code class="nowrap">chmod +x screen-mark</code>, run it: it starts in the tray, with the same hotkeys.</p>
             </div>
           </li>
         </ul>
-        <p class="install__all">The <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/latest">latest release</a> lists every file with its <span class="nowrap">SHA-256</span> checksum.</p>
+        <p class="install__all">The <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/latest">latest release</a> lists every file with its <span class="nowrap">SHA-256</span> checksum, also in <span class="nowrap">SHA256SUMS.txt</span>.</p>
 
         <div class="cargo" id="source">
           <p id="cargo-l">Or build it from source with <a href="https://rustup.rs">Rust</a> 1.80 or later:</p>
@@ -297,6 +297,7 @@
             <pre><code>cargo install --git <wbr>https://github.com/<wbr><span class="nowrap">Real-Fruit-Snacks</span>/<wbr><span class="nowrap">screen-mark</span> <span class="nowrap">--locked</span></code></pre>
             <button type="button" class="copy" aria-label="Copy the cargo command" data-copy="cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked">Copy</button>
           </div>
+          <p class="cargo__offline">No internet where you build? The release’s <span class="nowrap">source-vendored.tar.gz</span> holds every dependency and builds with <code class="nowrap">cargo build --offline</code>. The README lists the tools to bring.</p>
         </div>
 
         <h3>From the command line</h3>
@@ -342,7 +343,7 @@
 
 <footer class="foot">
   <div class="wrap foot__in">
-    <p class="foot__name">screen-mark 2.2.0 &middot; MIT &middot; an <a href="https://github.com/Real-Fruit-Snacks">RFS</a> tool</p>
+    <p class="foot__name">screen-mark 2.2.1 &middot; MIT &middot; an <a href="https://github.com/Real-Fruit-Snacks">RFS</a> tool</p>
     <p class="foot__links"><a href="https://github.com/Real-Fruit-Snacks/screen-mark">Source</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases">Releases</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/CHANGELOG.md">Changelog</a></p>
     <p class="foot__colophon">Set in Bricolage Grotesque and Azeret Mono. Toolbar icons from Lucide, the same set the app draws.</p>
   </div>

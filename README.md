@@ -13,7 +13,7 @@ Windows: download `screen-mark-vX.Y.Z-windows-x64.msi` (installer) or `.zip` (po
 cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked
 ```
 
-I wanted a screenshot tool that starts in under a second, draws an arrow without a round trip through a web view, and leaves no background service I didn't ask for. This is that: `winit` for windows, `tiny-skia` for drawing, a tray icon, two global hotkeys, and a TOML file. It assumes Windows 10 or later; the Linux build captures under X11 and nothing else yet.
+I wanted a screenshot tool that starts in under a second, draws an arrow without a round trip through a web view, and leaves no background service I didn't ask for. This is that: `winit` for windows, `tiny-skia` for drawing, a tray icon, three global hotkeys, and a TOML file. It assumes Windows 10 or later; the Linux build captures under X11 and nothing else yet.
 
 ## What's in it
 
@@ -62,6 +62,31 @@ Dark and light modes, switched in Settings › General or with `theme` in the co
 - CLI `--delay` waits silently. The on-screen countdown only appears for tray-menu delays.
 - `Ctrl+PrintScreen` and `Shift+PrintScreen` are already taken on some machines (Greenshot, ShareX, and some keyboard utilities register them; Greenshot uses `Shift+PrintScreen` for its own last region). screen-mark shows a popup when a hotkey can't be registered; click it to pick another in Settings › Keys.
 - Linux: `screen-mark capture --clipboard` loses the image when the command exits, because X11 clipboards live in the owning process. The tray app's clipboard is fine.
+
+## Offline and air-gapped use
+
+Everything on the release page works with no internet access. Only Imgur upload needs a connection.
+
+- **Windows:** the exe needs Windows 10 or later and nothing else, not even the Visual C++ Redistributable. The `.zip` and the MSI also carry this README, the changelog, the licence and `THIRD-PARTY-LICENSES.txt`.
+- **Linux:** the binary uses the system's GTK 3, libxdo and an AppIndicator library for the tray. On Ubuntu, install them with `sudo apt install libxdo3 libayatana-appindicator3-1` (GTK 3 comes with the desktop) before going offline.
+- **Website:** `screen-mark-vX.Y.Z-website.zip` is the whole site, with that release's downloads inside `docs/downloads/`, for an internal web server. Its `.gitlab-ci.yml` publishes it with GitLab Pages.
+- **Checksums:** `SHA256SUMS.txt` lists every file on the release. Check with `sha256sum -c SHA256SUMS.txt --ignore-missing` on Linux, or compare `Get-FileHash <file>` in PowerShell.
+
+### Building with no internet
+
+`screen-mark-vX.Y.Z-source-vendored.tar.gz` is the source plus every crate it depends on, in `vendor/`. Its `.cargo/config.toml` points cargo there, so no download is needed. Each release checks that it builds with networking switched off. Bring these onto the machine first:
+
+- **Rust.** `BUILT-WITH.txt` in the bundle names the version the release was built with. The [standalone installers](https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers) work offline.
+- **Windows:** Visual Studio Build Tools with the *Desktop development with C++* workload. `vs_buildtools.exe --layout <folder>` makes an offline installer.
+- **Linux:** `libgtk-3-dev libxdo-dev libxkbcommon-dev libwayland-dev libglib2.0-dev` (Ubuntu package names).
+- **The MSI only:** `cargo-wix` and the WiX Toolset 3. Install `cargo-wix` while online (`cargo install cargo-wix`). The exe itself needs neither.
+
+```sh
+tar -xzf screen-mark-vX.Y.Z-source-vendored.tar.gz
+cd screen-mark-vX.Y.Z
+cargo build --release --offline
+cargo test --offline
+```
 
 ## Configuration
 

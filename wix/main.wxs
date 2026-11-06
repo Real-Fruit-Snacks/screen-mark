@@ -51,6 +51,19 @@
                     </Component>
 
                     <!--
+                      The README, changelog and licences, so an installed copy carries its
+                      own documentation. THIRD-PARTY-LICENSES.txt is written by the release
+                      workflow (cargo about generate about.hbs) before cargo wix runs.
+                    -->
+                    <Component Id='docs0' Guid='C9CA878A-728C-4986-8B4F-54DC33EE2424'>
+                        <File Id='readme0' Name='README.md' DiskId='1' Source='README.md' />
+                        <File Id='changelog0' Name='CHANGELOG.md' DiskId='1' Source='CHANGELOG.md' />
+                        <File Id='license0' Name='LICENSE' DiskId='1' Source='LICENSE' />
+                        <File Id='thirdparty0' Name='THIRD-PARTY-LICENSES.txt' DiskId='1' Source='THIRD-PARTY-LICENSES.txt' />
+                        <RegistryValue Root='HKCU' Key='Software\screen-mark' Name='docs_installed' Type='integer' Value='1' KeyPath='yes' />
+                    </Component>
+
+                    <!--
                       Known trade-off: the Windows Installer Environment table writes the
                       per-user Path value back as REG_SZ. If the user's Path was
                       REG_EXPAND_SZ with %VAR% entries, those entries stop expanding.
@@ -89,8 +102,9 @@
             </Component>
         </DirectoryRef>
 
-        <Feature Id='Binaries' Title='Application' Description='Installs the screen-mark executable.' Level='1' AllowAdvertise='no' Display='expand'>
+        <Feature Id='Binaries' Title='Application' Description='Installs the screen-mark executable, its README, changelog and licences.' Level='1' AllowAdvertise='no' Display='expand'>
             <ComponentRef Id='binary0' />
+            <ComponentRef Id='docs0' />
         </Feature>
 
         <Feature Id='Environment' Title='PATH Environment Variable' Description='Add the install location to the PATH system environment variable.' Level='1' Absent='allow'>

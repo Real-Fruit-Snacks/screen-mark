@@ -1,0 +1,29 @@
+Third-party licences for screen-mark
+====================================
+
+screen-mark itself is under the MIT licence (see LICENSE). The release binaries
+also contain the open-source Rust crates below. Each licence text is printed
+once, followed by the crates it covers.
+
+The source code of every crate listed here, including the MPL-2.0 ones, is in
+the screen-mark-vX.Y.Z-source-vendored.tar.gz file on the release page, and on
+crates.io.
+
+Summary
+-------
+{{#each overview}}
+{{{name}}}: {{count}}
+{{/each}}
+
+{{#each licenses}}
+================================================================================
+{{{name}}} ({{{id}}})
+
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}}  {{{crate.repository}}}{{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

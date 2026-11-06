@@ -41,3 +41,6 @@ target2/
 
 # examples/render_theme.rs output
 /theme-*.png
+
+# Written by cargo about (about.hbs) for releases
+/THIRD-PARTY-LICENSES.txt

@@ -2,6 +2,20 @@
 
 All notable changes to screen-mark will be documented in this file.
 
+## [2.2.1] - 2026-11-05
+
+Everything needed to run and build screen-mark with no internet access is now in the release. See *Offline and air-gapped use* in the README.
+
+### Changed
+- **The Windows exe runs on a PC without the Visual C++ Redistributable.** The C runtime is now linked into `screen-mark.exe`, so it no longer needs `VCRUNTIME140.dll`. Before, a clean PC without that runtime couldn't start it.
+- The Windows `.zip`, the MSI and the Linux `.tar.gz` now include the README, the changelog, the licence and `THIRD-PARTY-LICENSES.txt`, the licences of the crates built into the binary.
+- The website zip now carries the release's downloads in `docs/downloads/`, and its download links point at them, so a copy on an offline web server works.
+- Website: the demo overlay works from the keyboard and with a screen reader, the first screen fits laptop and phone screens, and the install steps are clearer.
+
+### Added
+- `screen-mark-vX.Y.Z-source-vendored.tar.gz`: the source plus every crate it depends on. It builds with `cargo build --offline`, and each release checks that with networking switched off.
+- `SHA256SUMS.txt`, with a checksum for every file on the release.
+
 ## [2.2.0] - 2026-11-05
 
 ### Added

@@ -1,8 +1,9 @@
 # GitLab Pages deployment for the screen-mark website.
 # Publishes the static docs/ site on every push to the default branch.
-# No build step and no internet needed — the site (HTML, CSS, vendored
-# IBM Plex fonts, and SVGs) is served exactly as it sits
-# in the repo, so it works fully offline / air-gapped.
+# No build step and no internet needed — the site (HTML, CSS, JS, vendored
+# Bricolage Grotesque and Azeret Mono fonts, and images) is served exactly as it
+# sits in the repo, so it works fully offline / air-gapped. In the release's
+# website zip, docs/downloads/ also holds that release's files.
 
 pages:
   stage: deploy
