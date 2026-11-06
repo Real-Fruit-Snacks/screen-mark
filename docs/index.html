@@ -22,8 +22,9 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="preload" href="assets/fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/azeret-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="styles.css">
-<script>document.documentElement.classList.add('js')</script>
+<script>document.documentElement.classList.add('js');setTimeout(function(){if(!window.smReady)document.documentElement.classList.remove('js')},4000)</script>
 <script src="script.js" defer></script>
 </head>
 <body>
@@ -53,7 +54,7 @@
   </defs>
 </svg>
 
-<a class="skip" href="#how">Skip to the details</a>
+<a class="skip" href="#top">Skip to content</a>
 
 <header class="bar" data-window>
   <div class="wrap bar__in">
@@ -61,7 +62,7 @@
     <nav aria-label="On this page">
       <a href="#features">Tools</a>
       <a href="#install">Install</a>
-      <a href="#known-issues">Known issues</a>
+      <a href="#known-issues"><span class="nav-long">Known issues</span><span class="nav-short" aria-hidden="true">Issues</span></a>
       <a href="https://github.com/Real-Fruit-Snacks/screen-mark">GitHub</a>
     </nav>
   </div>
@@ -73,8 +74,9 @@
       <h1 class="wordmark" id="title" data-window>screen-mark</h1>
 
       <div class="capture" data-capture data-window>
-        <p class="lede">Screenshot capture and annotation in pure Rust, for Windows and for Linux under&nbsp;X11.</p>
+        <p class="lede">Free, open-source screenshot capture and annotation for Windows and Linux&nbsp;(X11), in pure&nbsp;Rust.</p>
         <p class="how"><kbd>Ctrl+PrtSc</kbd> saves and copies the monitor under your mouse. <kbd>Ctrl+Shift+S</kbd> opens an overlay like the one on this page: drag a region, draw on it, press <kbd>Enter</kbd> to copy.</p>
+        <p class="meta phone-note">screen-mark runs on a computer, not a phone. The button downloads the Windows installer; open this page on your PC to run it.</p>
         <div class="get">
           <a class="btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.msi">Download for Windows</a>
           <svg class="note-arrow" viewBox="0 0 132 64" aria-hidden="true" focusable="false">
@@ -83,34 +85,36 @@
           </svg>
           <span class="marker marker--static" aria-hidden="true">1</span>
         </div>
-        <p class="meta">v2.2.0 for Windows 10 and 11 &middot; .msi installer, or the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.zip">portable .zip</a> &middot; <a href="#install">Linux and cargo</a></p>
+        <p class="meta"><span>v2.2.0 &middot; 64-bit Windows 10 and 11 (tested on 11) &middot; .msi installer, or the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.zip">portable .zip</a> &middot; MIT licence</span>
+          <span>Windows may warn about an unknown publisher: choose More info, then Run anyway.</span>
+          <span class="meta__alt">On Linux: <a href="#linux">the .tar.gz (X11 only, experimental)</a> &middot; <a href="#source">build from source</a></span></p>
       </div>
 
-      <div class="toolbar" role="toolbar" aria-label="Capture toolbar, a working copy of the app's" data-toolbar>
-        <button type="button" data-tool="select" aria-label="Select (V)" class="x-md"><svg><use href="#i-select"/></svg></button>
-        <button type="button" data-tool="arrow" aria-label="Arrow (A)" aria-pressed="true"><svg><use href="#i-arrow"/></svg></button>
-        <button type="button" data-tool="rect" aria-label="Rectangle (R)"><svg><use href="#i-rectangle"/></svg></button>
-        <button type="button" data-tool="circle" aria-label="Circle (C)" class="x-sm"><svg><use href="#i-circle"/></svg></button>
-        <button type="button" data-tool="rounded" aria-label="Rounded rectangle (O)" class="x-md"><svg><use href="#i-rounded"/></svg></button>
-        <button type="button" data-tool="line" aria-label="Line (L)" class="x-sm"><svg><use href="#i-line"/></svg></button>
-        <button type="button" data-tool="pencil" aria-label="Pencil (P)" class="x-sm"><svg><use href="#i-pencil"/></svg></button>
-        <button type="button" data-tool="highlight" aria-label="Highlight (H)" class="x-md"><svg><use href="#i-highlight"/></svg></button>
-        <button type="button" data-tool="spotlight" aria-label="Spotlight (F)" class="x-md"><svg><use href="#i-spotlight"/></svg></button>
-        <button type="button" data-tool="text" aria-label="Text (T)" class="x-sm"><svg><use href="#i-text"/></svg></button>
-        <button type="button" data-tool="pixelate" aria-label="Pixelate (B)" class="x-md"><svg><use href="#i-pixelate"/></svg></button>
-        <button type="button" data-tool="step" aria-label="Step marker (N)" class="sep-md"><svg><use href="#i-step"/></svg></button>
-        <button type="button" data-tool="eyedropper" aria-label="Eyedropper (I)" class="x-md"><svg><use href="#i-eyedropper"/></svg></button>
-        <button type="button" data-tool="measure" aria-label="Measurement (M)" class="x-md sep"><svg><use href="#i-measure"/></svg></button>
-        <button type="button" data-color="#ff6e7a" aria-label="Red #ff6e7a" class="swatch" style="--c:#ff6e7a"></button>
-        <button type="button" data-color="#5cb8ff" aria-label="Blue #5cb8ff" class="swatch" style="--c:#5cb8ff"></button>
-        <button type="button" data-color="#3ddc97" aria-label="Green #3ddc97" class="swatch" style="--c:#3ddc97"></button>
-        <button type="button" data-color="amber" aria-label="Yellow #ffc247" class="swatch" style="--c:#ffc247" aria-pressed="true"></button>
-        <button type="button" data-color="#b78cff" aria-label="Mauve #b78cff" class="swatch sep" style="--c:#b78cff"></button>
-        <button type="button" data-act="ocr" aria-label="OCR (extract text)" class="x-md"><svg><use href="#i-ocr"/></svg></button>
-        <button type="button" data-act="upload" aria-label="Upload (Imgur)" class="x-md"><svg><use href="#i-upload"/></svg></button>
-        <button type="button" data-act="pin" aria-label="Pin" class="x-sm"><svg><use href="#i-pin"/></svg></button>
-        <button type="button" data-act="copy" aria-label="Copy (Ctrl+C)"><svg><use href="#i-copy"/></svg></button>
-        <button type="button" data-act="save" aria-label="Save (Ctrl+S)" class="x-sm"><svg><use href="#i-save"/></svg></button>
+      <div class="toolbar" role="toolbar" aria-label="Demo of the app’s capture toolbar" data-toolbar inert>
+        <button type="button" data-tool="select" aria-label="Select (V)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-select"/></svg></button>
+        <button type="button" data-tool="arrow" aria-label="Arrow (A)" aria-pressed="true"><svg aria-hidden="true" focusable="false"><use href="#i-arrow"/></svg></button>
+        <button type="button" data-tool="rect" aria-label="Rectangle (R)"><svg aria-hidden="true" focusable="false"><use href="#i-rectangle"/></svg></button>
+        <button type="button" data-tool="circle" aria-label="Circle (C)" class="x-sm"><svg aria-hidden="true" focusable="false"><use href="#i-circle"/></svg></button>
+        <button type="button" data-tool="rounded" aria-label="Rounded rectangle (O)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-rounded"/></svg></button>
+        <button type="button" data-tool="line" aria-label="Line (L)" class="x-sm"><svg aria-hidden="true" focusable="false"><use href="#i-line"/></svg></button>
+        <button type="button" data-tool="pencil" aria-label="Pencil (P)" class="x-sm"><svg aria-hidden="true" focusable="false"><use href="#i-pencil"/></svg></button>
+        <button type="button" data-tool="highlight" aria-label="Highlight (H)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-highlight"/></svg></button>
+        <button type="button" data-tool="spotlight" aria-label="Spotlight (F)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-spotlight"/></svg></button>
+        <button type="button" data-tool="text" aria-label="Text (T)" class="x-sm"><svg aria-hidden="true" focusable="false"><use href="#i-text"/></svg></button>
+        <button type="button" data-tool="pixelate" aria-label="Pixelate (B)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-pixelate"/></svg></button>
+        <button type="button" data-tool="step" aria-label="Step marker (N)" class="sep-md"><svg aria-hidden="true" focusable="false"><use href="#i-step"/></svg></button>
+        <button type="button" data-tool="eyedropper" aria-label="Eyedropper (I)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-eyedropper"/></svg></button>
+        <button type="button" data-tool="measure" aria-label="Measurement (M)" class="x-md sep"><svg aria-hidden="true" focusable="false"><use href="#i-measure"/></svg></button>
+        <button type="button" data-color="#ff6e7a" aria-label="Red" aria-pressed="false" class="swatch" style="--c:#ff6e7a"></button>
+        <button type="button" data-color="#5cb8ff" aria-label="Blue" aria-pressed="false" class="swatch x-xs" style="--c:#5cb8ff"></button>
+        <button type="button" data-color="#3ddc97" aria-label="Green" aria-pressed="false" class="swatch x-xs" style="--c:#3ddc97"></button>
+        <button type="button" data-color="amber" aria-label="Yellow" class="swatch" style="--c:var(--draw)" aria-pressed="true"></button>
+        <button type="button" data-color="#b78cff" aria-label="Mauve" aria-pressed="false" class="swatch sep" style="--c:#b78cff"></button>
+        <button type="button" data-act="ocr" aria-label="OCR (extract text)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-ocr"/></svg></button>
+        <button type="button" data-act="upload" aria-label="Upload (Imgur)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg></button>
+        <button type="button" data-act="pin" aria-label="Pin" class="x-sm"><svg aria-hidden="true" focusable="false"><use href="#i-pin"/></svg></button>
+        <button type="button" data-act="copy" aria-label="Copy (Ctrl+C)"><svg aria-hidden="true" focusable="false"><use href="#i-copy"/></svg></button>
+        <button type="button" data-act="save" aria-label="Save (Ctrl+S)" class="x-sm"><svg aria-hidden="true" focusable="false"><use href="#i-save"/></svg></button>
       </div>
     </div>
 
@@ -118,7 +122,8 @@
     <div class="cross" aria-hidden="true"></div>
     <svg class="ink" aria-hidden="true" focusable="false"></svg>
     <div class="pill" aria-hidden="true"></div>
-    <div class="toast" role="status" aria-live="polite"><p class="toast__title"></p><p class="toast__detail"></p></div>
+    <div class="toast" aria-hidden="true"><p class="toast__title"></p><p class="toast__detail"></p></div>
+    <p class="visually-hidden" role="status" data-live></p>
   </section>
 
   <section class="hotkeys" id="how" aria-labelledby="how-h">
@@ -131,13 +136,13 @@
           <h3>Save and copy, in one press</h3>
           <p>Saves a PNG of the monitor under the mouse to <code>Pictures\screen-mark</code> and puts the same image on the clipboard. Presses made while one is still saving are queued, and file names never overwrite each other. Settings › Capture can switch it to all monitors.</p>
           <figure class="popup">
-            <div class="popup__card" aria-hidden="true">
-              <span class="popup__thumb">
+            <div class="popup__card">
+              <span class="popup__thumb" aria-hidden="true">
                 <svg viewBox="0 0 96 60"><rect class="t-bg" width="96" height="60"/><rect class="t-dim" width="96" height="60"/><rect class="t-word" x="8" y="9" width="62" height="9"/><rect class="t-sel" x="8" y="25" width="38" height="24"/><rect class="t-btn" x="12" y="40" width="18" height="5"/><path class="t-arrow" d="M44 30 L33 40"/></svg>
               </span>
               <span class="popup__text">
                 <span class="popup__title">Saved and copied</span>
-                <span class="popup__detail"><span class="nowrap">screen-mark_2026-10-29_211403.png</span> &middot; click to show in folder</span>
+                <span class="popup__detail"><span class="popup__file"><span class="nowrap">screen-mark</span>_<wbr><span class="nowrap">2026-10-29</span>_<wbr>211403.png</span>Click to show in folder</span>
               </span>
             </div>
             <figcaption>The popup that follows, in the corner of the same monitor. Click it to open the folder with the file selected. Settings › Capture can switch it to system notifications or turn it off; errors always show.</figcaption>
@@ -163,7 +168,7 @@
         </div>
       </div>
 
-      <p class="aside">All three are rebindable in Settings › Keys. If another app already holds one (Greenshot, ShareX and some keyboard utilities register <kbd>Ctrl+PrtSc</kbd> or <kbd>Shift+PrtSc</kbd>), a popup names the key; click it to pick another.</p>
+      <div class="aside"><p>All three are rebindable in Settings › Keys. If another app already holds one (Greenshot, ShareX and some keyboard utilities register <kbd>Ctrl+PrtSc</kbd> or <kbd>Shift+PrtSc</kbd>), a popup names the key; click it to pick another.</p></div>
     </div>
   </section>
 
@@ -171,44 +176,45 @@
     <div class="wrap">
       <div class="tools__head">
         <h2 id="tools-h">Fourteen tools, one key each</h2>
-        <p>In the overlay every tool has a single key. Press one on your keyboard: it lights up below and switches the tool in the overlay at the top of this page.</p>
+        <p>In the overlay every tool has a single key.<span class="js-only"> Click or tap a key below: it lights up and becomes the tool in the overlay at the top of this page. Once you’ve clicked one, the letters on your keyboard work too.</span></p>
       </div>
 
-      <div class="kb" data-kb>
+      <div class="kb" role="toolbar" aria-label="Tool keys" data-kb inert>
         <div class="kb__row">
           <span class="key" data-l="Q" aria-hidden="true"></span><span class="key" data-l="W" aria-hidden="true"></span><span class="key" data-l="E" aria-hidden="true"></span>
-          <span class="key is-tool" data-key="r"><kbd>R</kbd><svg><use href="#i-rectangle"/></svg><span class="key__name">Rectangle</span></span>
-          <span class="key is-tool" data-key="t"><kbd>T</kbd><svg><use href="#i-text"/></svg><span class="key__name">Text</span></span>
+          <button type="button" class="key is-tool" data-key="r" aria-label="Rectangle (R)" aria-pressed="false"><kbd>R</kbd><svg aria-hidden="true" focusable="false"><use href="#i-rectangle"/></svg><span class="key__name">Rectangle</span></button>
+          <button type="button" class="key is-tool" data-key="t" aria-label="Text (T)" aria-pressed="false"><kbd>T</kbd><svg aria-hidden="true" focusable="false"><use href="#i-text"/></svg><span class="key__name">Text</span></button>
           <span class="key" data-l="Y" aria-hidden="true"></span><span class="key" data-l="U" aria-hidden="true"></span>
-          <span class="key is-tool" data-key="i"><kbd>I</kbd><svg><use href="#i-eyedropper"/></svg><span class="key__name">Eyedropper</span></span>
-          <span class="key is-tool" data-key="o"><kbd>O</kbd><svg><use href="#i-rounded"/></svg><span class="key__name">Rounded rect</span></span>
-          <span class="key is-tool" data-key="p"><kbd>P</kbd><svg><use href="#i-pencil"/></svg><span class="key__name">Pencil</span></span>
+          <button type="button" class="key is-tool" data-key="i" aria-label="Eyedropper (I)" aria-pressed="false"><kbd>I</kbd><svg aria-hidden="true" focusable="false"><use href="#i-eyedropper"/></svg><span class="key__name">Eyedropper</span></button>
+          <button type="button" class="key is-tool" data-key="o" aria-label="Rounded rectangle (O)" aria-pressed="false"><kbd>O</kbd><svg aria-hidden="true" focusable="false"><use href="#i-rounded"/></svg><span class="key__name">Rounded rect</span></button>
+          <button type="button" class="key is-tool" data-key="p" aria-label="Pencil (P)" aria-pressed="false"><kbd>P</kbd><svg aria-hidden="true" focusable="false"><use href="#i-pencil"/></svg><span class="key__name">Pencil</span></button>
         </div>
         <div class="kb__row">
-          <span class="key is-tool" data-key="a"><kbd>A</kbd><svg><use href="#i-arrow"/></svg><span class="key__name">Arrow</span></span>
+          <button type="button" class="key is-tool" data-key="a" aria-label="Arrow (A)" aria-pressed="false"><kbd>A</kbd><svg aria-hidden="true" focusable="false"><use href="#i-arrow"/></svg><span class="key__name">Arrow</span></button>
           <span class="key" data-l="S" aria-hidden="true"></span><span class="key" data-l="D" aria-hidden="true"></span>
-          <span class="key is-tool" data-key="f"><kbd>F</kbd><svg><use href="#i-spotlight"/></svg><span class="key__name">Spotlight</span></span>
+          <button type="button" class="key is-tool" data-key="f" aria-label="Spotlight (F)" aria-pressed="false"><kbd>F</kbd><svg aria-hidden="true" focusable="false"><use href="#i-spotlight"/></svg><span class="key__name">Spotlight</span></button>
           <span class="key" data-l="G" aria-hidden="true"></span>
-          <span class="key is-tool" data-key="h"><kbd>H</kbd><svg><use href="#i-highlight"/></svg><span class="key__name">Highlight</span></span>
+          <button type="button" class="key is-tool" data-key="h" aria-label="Highlight (H)" aria-pressed="false"><kbd>H</kbd><svg aria-hidden="true" focusable="false"><use href="#i-highlight"/></svg><span class="key__name">Highlight</span></button>
           <span class="key" data-l="J" aria-hidden="true"></span><span class="key" data-l="K" aria-hidden="true"></span>
-          <span class="key is-tool" data-key="l"><kbd>L</kbd><svg><use href="#i-line"/></svg><span class="key__name">Line</span></span>
+          <button type="button" class="key is-tool" data-key="l" aria-label="Line (L)" aria-pressed="false"><kbd>L</kbd><svg aria-hidden="true" focusable="false"><use href="#i-line"/></svg><span class="key__name">Line</span></button>
         </div>
         <div class="kb__row">
           <span class="key" data-l="Z" aria-hidden="true"></span><span class="key" data-l="X" aria-hidden="true"></span>
-          <span class="key is-tool" data-key="c"><kbd>C</kbd><svg><use href="#i-circle"/></svg><span class="key__name">Circle</span></span>
-          <span class="key is-tool" data-key="v"><kbd>V</kbd><svg><use href="#i-select"/></svg><span class="key__name">Select, move</span></span>
-          <span class="key is-tool" data-key="b"><kbd>B</kbd><svg><use href="#i-pixelate"/></svg><span class="key__name">Pixelate</span></span>
-          <span class="key is-tool" data-key="n"><kbd>N</kbd><svg><use href="#i-step"/></svg><span class="key__name">Step marker</span></span>
-          <span class="key is-tool" data-key="m"><kbd>M</kbd><svg><use href="#i-measure"/></svg><span class="key__name">Measurement</span></span>
+          <button type="button" class="key is-tool" data-key="c" aria-label="Circle (C)" aria-pressed="false"><kbd>C</kbd><svg aria-hidden="true" focusable="false"><use href="#i-circle"/></svg><span class="key__name">Circle</span></button>
+          <button type="button" class="key is-tool" data-key="v" aria-label="Select, move (V)" aria-pressed="false"><kbd>V</kbd><svg aria-hidden="true" focusable="false"><use href="#i-select"/></svg><span class="key__name">Select, move</span></button>
+          <button type="button" class="key is-tool" data-key="b" aria-label="Pixelate (B)" aria-pressed="false"><kbd>B</kbd><svg aria-hidden="true" focusable="false"><use href="#i-pixelate"/></svg><span class="key__name">Pixelate</span></button>
+          <button type="button" class="key is-tool" data-key="n" aria-label="Step marker (N)" aria-pressed="false"><kbd>N</kbd><svg aria-hidden="true" focusable="false"><use href="#i-step"/></svg><span class="key__name">Step marker</span></button>
+          <button type="button" class="key is-tool" data-key="m" aria-label="Measurement (M)" aria-pressed="false"><kbd>M</kbd><svg aria-hidden="true" focusable="false"><use href="#i-measure"/></svg><span class="key__name">Measurement</span></button>
         </div>
       </div>
+      <p class="kb__now js-only" aria-hidden="true" data-now></p>
 
       <dl class="keylist">
         <div><dt><kbd>V</kbd></dt><dd>Select, move</dd></div>
         <div><dt><kbd>A</kbd></dt><dd>Arrow</dd></div>
         <div><dt><kbd>R</kbd></dt><dd>Rectangle</dd></div>
         <div><dt><kbd>C</kbd></dt><dd>Circle</dd></div>
-        <div><dt><kbd>O</kbd></dt><dd>Rounded rect</dd></div>
+        <div><dt><kbd>O</kbd></dt><dd>Rounded rectangle</dd></div>
         <div><dt><kbd>L</kbd></dt><dd>Line</dd></div>
         <div><dt><kbd>P</kbd></dt><dd>Pencil</dd></div>
         <div><dt><kbd>H</kbd></dt><dd>Highlight</dd></div>
@@ -222,7 +228,7 @@
 
       <div class="tools__notes">
         <p><kbd>Ctrl+Z</kbd> and <kbd>Ctrl+Shift+Z</kbd> undo and redo, so nothing you draw is final until you copy. The scroll wheel changes the tool size. Highlight multiplies like a real highlighter, so dark text stays readable. Step markers number themselves.</p>
-        <p>Every key is rebindable in Settings › Keys: click a binding and press the new combination. Settings refuses a combination another binding already uses, one Windows keeps for itself (<kbd>Alt+Tab</kbd>, <kbd>Win+L</kbd>), or a global hotkey another app has registered, and says which.</p>
+        <p>Every key is rebindable in Settings › Keys: click a binding and press the new combination. Settings refuses a combination another binding already uses, one Windows keeps for itself <span class="nowrap">(<kbd>Alt+Tab</kbd>,</span> <kbd>Win+L</kbd>), or a global hotkey another app has registered, and says which.</p>
         <p>Dark and light modes, Nightshift and Dayshift from the <a href="https://github.com/Real-Fruit-Snacks/rfs-brand/blob/main/BRAND.md">RFS palettes</a>. Five annotation colours, or any <code>#rrggbb</code>.</p>
       </div>
     </div>
@@ -234,7 +240,7 @@
       <dl class="spec">
         <div><dt>Copy</dt><dd><kbd>Enter</kbd> or <kbd>Ctrl+C</kbd>. The selection and everything drawn on it, ready to paste.</dd></div>
         <div><dt>Save</dt><dd><kbd>Ctrl+S</kbd>. A PNG, JPEG or WebP save dialog, or straight into your captures folder if you turn the dialog off.</dd></div>
-        <div><dt>Pin</dt><dd>Keeps the capture on screen as an always-on-top window, for reference while you work.</dd></div>
+        <div><dt>Pin</dt><dd>Keeps the capture on screen as an <span class="nowrap">always-on-top</span> window, for reference while you work.</dd></div>
         <div><dt>OCR</dt><dd>Runs the Windows OCR API on the capture and copies the text. Windows only, and the OCR language pack for your display language has to be installed.</dd></div>
         <div><dt>Upload</dt><dd>Anonymous upload to Imgur. It ships with no client ID: register one at api.imgur.com and set it in Settings or <code>SCREEN_MARK_IMGUR_CLIENT_ID</code>.</dd></div>
         <div><dt>History</dt><dd>The last 20 captures, in their own window.</dd></div>
@@ -247,40 +253,49 @@
     <div class="wrap">
       <h2 id="why-h" class="visually-hidden">Why it exists</h2>
       <blockquote>
-        <p>I wanted a screenshot tool that <mark>starts in under a second</mark>, draws an arrow without a round trip through a web view, and leaves no background service I didn't ask for.</p>
+        <p>I wanted a screenshot tool that <mark>starts in under a second</mark>, draws an arrow without a round trip through a web view, and leaves no background service I didn’t ask for.</p>
       </blockquote>
-      <p class="why__parts">This is that: <code>winit</code> for windows, <code>tiny-skia</code> for drawing, a tray icon, two global hotkeys and a TOML file. The release is one exe with no browser engine inside.</p>
+      <p class="why__parts">This is that: <code>winit</code> for windows, <code class="nowrap">tiny-skia</code> for drawing, a tray icon, three global hotkeys and a TOML file. The release is one exe with no browser engine inside.</p>
     </div>
   </section>
 
   <section class="install" id="install" aria-labelledby="install-h">
     <div class="wrap install__in">
-      <h2 id="install-h">Install</h2>
+      <div class="install__head">
+        <h2 id="install-h">Install</h2>
+        <ol class="steps">
+          <li><span>Download the installer and run it. It installs for your user only, so it doesn’t ask for admin rights.</span></li>
+          <li><span>Open screen-mark from the Start menu. It starts in the tray, by the clock; Windows may tuck the icon under the <kbd>^</kbd> arrow there.</span></li>
+          <li><span>Press <kbd>Ctrl+PrtSc</kbd> to save and copy a screen, or <kbd>Ctrl+Shift+S</kbd> to open the overlay.</span></li>
+        </ol>
+      </div>
       <div class="install__body">
         <ul class="files">
           <li>
-            <span class="files__os">Windows</span>
-            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.msi">screen-mark-v2.2.0-windows-x64.msi</a>
-            <span class="files__note">Installer. A 1.x MSI is upgraded in place.</span>
+            <span class="files__os">Windows 10 and 11</span>
+            <div class="files__set">
+              <p><a class="btn files__btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.msi">Download the installer</a></p>
+              <p class="files__note"><span class="files__file">screen-mark-v2.2.0-windows-x64.msi</span>, with a Start menu entry. A 1.x MSI is upgraded in place.</p>
+              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.zip">screen-mark-v2.2.0-windows-x64.zip</a></p>
+              <p class="files__note">Portable. The exe asks before it installs itself to AppData.</p>
+              <p class="files__note">Neither is code-signed yet, so Windows SmartScreen may stop the first run: choose <b>More info</b>, then <b>Run anyway</b>.</p>
+            </div>
           </li>
-          <li>
-            <span class="files__os">Windows</span>
-            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-windows-x64.zip">screen-mark-v2.2.0-windows-x64.zip</a>
-            <span class="files__note">Portable. The exe asks before it installs itself to AppData.</span>
-          </li>
-          <li>
+          <li id="linux">
             <span class="files__os">Linux</span>
-            <a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-linux-x64.tar.gz">screen-mark-v2.2.0-linux-x64.tar.gz</a>
-            <span class="files__note">X11 only, experimental. Extract, <code>chmod +x screen-mark</code>, run it.</span>
+            <div class="files__set">
+              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.2.0/screen-mark-v2.2.0-linux-x64.tar.gz">screen-mark-v2.2.0-linux-x64.tar.gz</a></p>
+              <p class="files__note">X11 only (not Wayland), experimental. Built on Ubuntu 24.04; it needs GTK 3, libxdo and an AppIndicator library for the tray (on Ubuntu, <code>sudo apt install <span class="nowrap">libxdo3</span> <span class="nowrap">libayatana-appindicator3-1</span></code>). Extract, <code class="nowrap">chmod +x screen-mark</code>, run it: it starts in the tray, with the same hotkeys.</p>
+            </div>
           </li>
         </ul>
-        <p class="install__all">Every file is on the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/latest">latest release</a>, with its notes.</p>
+        <p class="install__all">The <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/latest">latest release</a> lists every file with its <span class="nowrap">SHA-256</span> checksum.</p>
 
-        <div class="cargo">
-          <p id="cargo-l">Or build it with <a href="https://rustup.rs">Rust</a> 1.80 or later:</p>
+        <div class="cargo" id="source">
+          <p id="cargo-l">Or build it from source with <a href="https://rustup.rs">Rust</a> 1.80 or later:</p>
           <div class="cmd">
-            <pre aria-labelledby="cargo-l"><code>cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked</code></pre>
-            <button type="button" class="copy" data-copy="cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked">Copy</button>
+            <pre><code>cargo install --git <wbr>https://github.com/<wbr><span class="nowrap">Real-Fruit-Snacks</span>/<wbr><span class="nowrap">screen-mark</span> <span class="nowrap">--locked</span></code></pre>
+            <button type="button" class="copy" aria-label="Copy the cargo command" data-copy="cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked">Copy</button>
           </div>
         </div>
 
@@ -292,7 +307,7 @@
           <div><dt><code>screen-mark capture --delay 5</code></dt><dd>Waits five seconds, then opens the overlay.</dd></div>
           <div><dt><code>screen-mark install</code></dt><dd>Copies the exe to AppData with a Start Menu entry and PATH. <code>uninstall</code> removes it.</dd></div>
         </dl>
-        <p class="install__config">Settings are written on first run to <code>%APPDATA%\screen-mark\config.toml</code> on Windows or <code>~/.config/screen-mark/config.toml</code> on Linux. Every key is optional; <a href="https://github.com/Real-Fruit-Snacks/screen-mark#configuration">the README lists them</a>.</p>
+        <p class="install__config">Settings are written on first run to <code>%APPDATA%\<wbr><span class="nowrap">screen-mark</span>\<wbr>config.toml</code> on Windows or <code>~/.config/<wbr><span class="nowrap">screen-mark</span>/<wbr>config.toml</code> on Linux. Every key is optional; <a href="https://github.com/Real-Fruit-Snacks/screen-mark#configuration">the README lists them</a>.</p>
       </div>
     </div>
   </section>
@@ -302,23 +317,23 @@
       <div>
         <h2>Tested on</h2>
         <ul class="plain">
-          <li><b>Windows 11</b>, Rust stable. My daily machine; every release is used in anger before it's tagged.</li>
+          <li><b>Windows 11</b>, Rust stable. My daily machine; every release is used in anger before it’s tagged.</li>
           <li><b>Windows Server 2025</b>, Rust stable. CI builds, tests and runs clippy on every push.</li>
           <li><b>Ubuntu 24.04 on X11</b>, Rust stable. CI builds and tests, then drives the real binary on a virtual display with two monitors.</li>
-          <li><b>Not tested:</b> Wayland, where the backend is a stub and capture does nothing, and macOS, where it doesn't build.</li>
+          <li><b>Not tested:</b> Windows 10, which it supports but I don’t run; Wayland, where the backend is a stub and capture does nothing; and macOS, where it doesn’t build.</li>
         </ul>
       </div>
       <div>
         <h2>Known issues</h2>
         <ul class="plain">
-          <li>Linux capture is X11 only and experimental. Multi-monitor and HiDPI aren't verified there.</li>
+          <li>Linux capture is X11 only and experimental. Multi-monitor and HiDPI aren’t verified there.</li>
           <li>OCR is Windows only and needs the OCR language pack for your display language.</li>
           <li>Imgur upload needs your own client ID.</li>
-          <li>Window capture skips cloaked UWP windows on purpose, so some Store apps can't be picked by click.</li>
-          <li><kbd>Ctrl+PrtSc</kbd> is taken on some machines. screen-mark says so and lets you pick another key.</li>
+          <li>Window capture skips cloaked UWP windows on purpose, so some Store apps can’t be picked by click.</li>
+          <li><kbd>Ctrl+PrtSc</kbd> and <kbd>Shift+PrtSc</kbd> are taken on some machines. <span class="nowrap">screen-mark</span> says so and lets you pick another key.</li>
           <li><code>--delay</code> on the command line waits silently. The countdown only shows for delays from the tray menu.</li>
-          <li>Linux: <code>capture --clipboard</code> loses the image when the command exits, because X11 clipboards live in the owning process. The tray app's clipboard is fine.</li>
-          <li>Upgrading from HydroShot 1.x moves your config, history and autostart across. Run <code>hydroshot uninstall</code> once to remove an old self-installed copy.</li>
+          <li>Linux: <code>capture --clipboard</code> loses the image when the command exits, because X11 clipboards live in the owning process. The tray app’s clipboard is fine.</li>
+          <li>Upgrading from HydroShot 1.x (screen-mark’s old name) moves your config, history and autostart across. Run <code>hydroshot uninstall</code> once to remove an old <span class="nowrap">self-installed</span> copy.</li>
         </ul>
       </div>
     </div>
