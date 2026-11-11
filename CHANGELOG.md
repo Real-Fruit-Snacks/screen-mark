@@ -2,7 +2,7 @@
 
 All notable changes to screen-mark will be documented in this file.
 
-## [Unreleased]
+## [2.4.0] - 2026-11-11
 
 Images that are already there can be marked up, History can bring a capture back with its annotations still editable, shapes can be dashed or filled, and capture works on Wayland.
 

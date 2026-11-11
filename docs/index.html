@@ -79,14 +79,14 @@
         <p class="how"><kbd>Ctrl+PrtSc</kbd> saves and copies the monitor under your mouse. <kbd>Ctrl+Shift+S</kbd> opens an overlay like the one on this page: drag a region, draw on it, press <kbd>Enter</kbd> to copy.</p>
         <p class="meta phone-note">screen-mark runs on a computer, not a phone. The button downloads the Windows installer; open this page on your PC to run it.</p>
         <div class="get">
-          <a class="btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.3.0/screen-mark-v2.3.0-windows-x64.msi">Download for Windows</a>
+          <a class="btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.4.0/screen-mark-v2.4.0-windows-x64.msi">Download for Windows</a>
           <svg class="note-arrow" viewBox="0 0 132 64" aria-hidden="true" focusable="false">
             <path class="note-arrow__shaft" d="M124 8 L15.6 52.1"/>
             <path class="note-arrow__head" d="M6 56 L13.4 46.5 L17.9 57.6 Z"/>
           </svg>
           <span class="marker marker--static" aria-hidden="true">1</span>
         </div>
-        <p class="meta"><span>v2.3.0 &middot; 64-bit Windows 10 and 11 (tested on 11) &middot; .msi installer, or the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.3.0/screen-mark-v2.3.0-windows-x64.zip">portable .zip</a> &middot; MIT licence</span>
+        <p class="meta"><span>v2.4.0 &middot; 64-bit Windows 10 and 11 (tested on 11) &middot; .msi installer, or the <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.4.0/screen-mark-v2.4.0-windows-x64.zip">portable .zip</a> &middot; MIT licence</span>
           <span>Windows may warn about an unknown publisher: choose More info, then Run anyway.</span>
           <span class="meta__alt">On Linux: <a href="#linux">the .tar.gz (X11 only, experimental)</a> &middot; <a href="#source">build from source</a></span></p>
       </div>
@@ -157,7 +157,7 @@
         <div class="hk__body">
           <h3>Open the overlay</h3>
           <p>Drag for a region, click for a window, <kbd>Esc</kbd> cancels. <kbd>Enter</kbd> or <kbd>Ctrl+C</kbd> copies the selection with everything drawn on it; <kbd>Ctrl+S</kbd> saves it as PNG, JPEG or WebP.</p>
-          <p>screen-mark lives in the tray, with optional autostart. The tray menu has the same captures, plus a delayed one with a 3, 5 or 10 second countdown.</p>
+          <p>screen-mark lives in the tray, with optional autostart. The tray menu has the same captures, a delayed one with a 3, 5 or 10 second countdown, and two that open an image you already have, a file or the clipboard’s, in the same editor.</p>
         </div>
       </div>
 
@@ -232,7 +232,7 @@
 
       <div class="tools__notes">
         <p><kbd>Ctrl+Z</kbd> and <kbd>Ctrl+Shift+Z</kbd> undo and redo, so nothing you draw is final until you copy. The scroll wheel changes the tool size. Highlight multiplies like a real highlighter, so dark text stays readable. Step markers number themselves.</p>
-        <p>Redact draws a solid box, and nothing under it reaches the copy. Pixelate only blurs, which is fine for a face in a crowd and not for a password. Hold <kbd>Shift</kbd> for squares, circles and lines at 15° steps. The arrow keys move the pointer, the region or the selected annotation one pixel at a time, ten with <kbd>Shift</kbd>, and a magnifier shows the pixels under the pointer while you place the region.</p>
+        <p>Redact draws a solid box, and nothing under it reaches the copy. Pixelate only blurs, which is fine for a face in a crowd and not for a password. Rectangles, circles, lines and arrows can be an outline, dashed or filled: <kbd>D</kbd> switches. Hold <kbd>Shift</kbd> for squares, circles and lines at 15° steps. The arrow keys move the pointer, the region or the selected annotation one pixel at a time, ten with <kbd>Shift</kbd>, and a magnifier shows the pixels under the pointer while you place the region.</p>
         <p>Every key is rebindable in Settings › Keys: click a binding and press the new combination. Settings refuses a combination another binding already uses, one Windows keeps for itself <span class="nowrap">(<kbd>Alt+Tab</kbd>,</span> <kbd>Win+L</kbd>), or a global hotkey another app has registered, and says which.</p>
         <p>Dark and light modes, Nightshift and Dayshift from the <a href="https://github.com/Real-Fruit-Snacks/rfs-brand/blob/main/BRAND.md">RFS palettes</a>. Five annotation colours, or any <code>#rrggbb</code>.</p>
       </div>
@@ -248,7 +248,8 @@
         <div><dt>Pin</dt><dd>Keeps the capture on screen as an <span class="nowrap">always-on-top</span> window, for reference while you work.</dd></div>
         <div><dt>OCR</dt><dd>Runs the Windows OCR API on the capture and copies the text. Windows only, and the OCR language pack for your display language has to be installed.</dd></div>
         <div><dt>Upload</dt><dd>Anonymous upload to Imgur. It ships with no client ID: register one at api.imgur.com and set it in Settings or <code>SCREEN_MARK_IMGUR_CLIENT_ID</code>.</dd></div>
-        <div><dt>History</dt><dd>The last 20 captures, in their own window.</dd></div>
+        <div><dt>Send</dt><dd>Hands the capture to a command of your own, an upload script or a copy to a share, and copies what it prints.</dd></div>
+        <div><dt>History</dt><dd>The last 20 captures, in their own window: copy one again, save it, delete it, or mark it up again with its arrows and text still editable.</dd></div>
       </dl>
       <p class="after__switches">Two switches in Settings › Capture change the region flow. <b>Save a file every time I copy</b> writes a PNG alongside each copy. <b>Copy as soon as a region is drawn</b> skips the toolbar, so drag and release is the whole job.</p>
     </div>
@@ -279,9 +280,9 @@
           <li>
             <span class="files__os">Windows 10 and 11</span>
             <div class="files__set">
-              <p><a class="btn files__btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.3.0/screen-mark-v2.3.0-windows-x64.msi">Download the installer</a></p>
-              <p class="files__note"><span class="files__file">screen-mark-v2.3.0-windows-x64.msi</span>, with a Start menu entry. A 1.x MSI is upgraded in place.</p>
-              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.3.0/screen-mark-v2.3.0-windows-x64.zip">screen-mark-v2.3.0-windows-x64.zip</a></p>
+              <p><a class="btn files__btn" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.4.0/screen-mark-v2.4.0-windows-x64.msi">Download the installer</a></p>
+              <p class="files__note"><span class="files__file">screen-mark-v2.4.0-windows-x64.msi</span>, with a Start menu entry. A 1.x MSI is upgraded in place.</p>
+              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.4.0/screen-mark-v2.4.0-windows-x64.zip">screen-mark-v2.4.0-windows-x64.zip</a></p>
               <p class="files__note">Portable. The exe asks before it installs itself to AppData.</p>
               <p class="files__note">Neither is code-signed yet, so Windows SmartScreen may stop the first run: choose <b>More info</b>, then <b>Run anyway</b>.</p>
             </div>
@@ -289,8 +290,8 @@
           <li id="linux">
             <span class="files__os">Linux</span>
             <div class="files__set">
-              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.3.0/screen-mark-v2.3.0-linux-x64.tar.gz">screen-mark-v2.3.0-linux-x64.tar.gz</a></p>
-              <p class="files__note">X11 only (not Wayland), experimental. Built on Ubuntu 24.04; it needs GTK 3, libxdo, libxkbcommon-x11 and an AppIndicator library for the tray (on Ubuntu, <code>sudo apt install <span class="nowrap">libxdo3</span> <span class="nowrap">libxkbcommon-x11-0</span> <span class="nowrap">libayatana-appindicator3-1</span></code>). Extract, <code class="nowrap">chmod +x screen-mark</code>, run it: it starts in the tray, with the same hotkeys.</p>
+              <p><a class="files__name" href="https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/v2.4.0/screen-mark-v2.4.0-linux-x64.tar.gz">screen-mark-v2.4.0-linux-x64.tar.gz</a></p>
+              <p class="files__note">X11, or Wayland through the desktop’s screenshot portal; experimental. Built on Ubuntu 24.04; it needs GTK 3, libxdo, libxkbcommon-x11 and an AppIndicator library for the tray (on Ubuntu, <code>sudo apt install <span class="nowrap">libxdo3</span> <span class="nowrap">libxkbcommon-x11-0</span> <span class="nowrap">libayatana-appindicator3-1</span></code>). Extract, <code class="nowrap">chmod +x screen-mark</code>, run it: it starts in the tray, with the same hotkeys.</p>
             </div>
           </li>
         </ul>
@@ -310,7 +311,8 @@
           <div><dt><code>screen-mark</code></dt><dd>Starts in the tray.</dd></div>
           <div><dt><code>screen-mark capture --clipboard</code></dt><dd>Captures the full screen to the clipboard, no UI.</dd></div>
           <div><dt><code>screen-mark capture --save out.png</code></dt><dd>Captures the full screen to a file, no UI.</dd></div>
-          <div><dt><code>screen-mark capture --delay 5</code></dt><dd>Waits five seconds, then opens the overlay.</dd></div>
+          <div><dt><code>screen-mark capture --delay 5</code></dt><dd>Counts down five seconds on screen, then opens the overlay.</dd></div>
+          <div><dt><code>screen-mark edit photo.png</code></dt><dd>Opens an image to mark up; with no file, the clipboard’s image.</dd></div>
           <div><dt><code>screen-mark install</code></dt><dd>Copies the exe to AppData with a Start Menu entry and PATH. <code>uninstall</code> removes it.</dd></div>
         </dl>
         <p class="install__config">Settings are written on first run to <code>%APPDATA%\<wbr><span class="nowrap">screen-mark</span>\<wbr>config.toml</code> on Windows or <code>~/.config/<wbr><span class="nowrap">screen-mark</span>/<wbr>config.toml</code> on Linux. Every key is optional; <a href="https://github.com/Real-Fruit-Snacks/screen-mark#configuration">the README lists them</a>.</p>
@@ -326,18 +328,18 @@
           <li><b>Windows 11</b>, Rust stable. My daily machine; every release is used in anger before it’s tagged.</li>
           <li><b>Windows Server 2025</b>, Rust stable. CI builds, tests and runs clippy on every push.</li>
           <li><b>Ubuntu 24.04 on X11</b>, Rust stable. CI builds and tests, then drives the real binary on a virtual display with two monitors.</li>
-          <li><b>Not tested:</b> Windows 10, which it supports but I don’t run; Wayland, where the backend is a stub and capture does nothing; and macOS, where it doesn’t build.</li>
+          <li><b>Wayland</b>: capture goes through the screenshot portal, tested on CI against a stand-in, not yet on a real GNOME or KDE session.</li>
+          <li><b>Not tested:</b> Windows 10, which it supports but I don’t run; and macOS, where it doesn’t build.</li>
         </ul>
       </div>
       <div>
         <h2>Known issues</h2>
         <ul class="plain">
-          <li>Linux capture is X11 only and experimental. Multi-monitor and HiDPI aren’t verified there.</li>
+          <li>Linux capture is experimental. Multi-monitor and HiDPI aren’t verified there. Wayland has no global hotkeys: bind a desktop shortcut to <code>screen-mark capture</code>.</li>
           <li>OCR is Windows only and needs the OCR language pack for your display language.</li>
           <li>Imgur upload needs your own client ID.</li>
           <li>Window capture skips cloaked UWP windows on purpose, so some Store apps can’t be picked by click.</li>
           <li><kbd>Ctrl+PrtSc</kbd> and <kbd>Shift+PrtSc</kbd> are taken on some machines. <span class="nowrap">screen-mark</span> says so and lets you pick another key.</li>
-          <li><code>--delay</code> on the command line waits silently. The countdown only shows for delays from the tray menu.</li>
           <li>Linux: <code>capture --clipboard</code> loses the image when the command exits, because X11 clipboards live in the owning process. The tray app’s clipboard is fine.</li>
           <li>Upgrading from HydroShot 1.x (screen-mark’s old name) moves your config, history and autostart across. Run <code>hydroshot uninstall</code> once to remove an old <span class="nowrap">self-installed</span> copy.</li>
         </ul>
@@ -348,7 +350,7 @@
 
 <footer class="foot">
   <div class="wrap foot__in">
-    <p class="foot__name">screen-mark 2.3.0 &middot; MIT &middot; an <a href="https://github.com/Real-Fruit-Snacks">RFS</a> tool</p>
+    <p class="foot__name">screen-mark 2.4.0 &middot; MIT &middot; an <a href="https://github.com/Real-Fruit-Snacks">RFS</a> tool</p>
     <p class="foot__links"><a href="https://github.com/Real-Fruit-Snacks/screen-mark">Source</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases">Releases</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/CHANGELOG.md">Changelog</a></p>
     <p class="foot__colophon">Set in Bricolage Grotesque and Azeret Mono. Toolbar icons from Lucide, the same set the app draws.</p>
   </div>
