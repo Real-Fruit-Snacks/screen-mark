@@ -2,7 +2,9 @@
 
 All notable changes to screen-mark will be documented in this file.
 
-## [Unreleased]
+## [2.3.0] - 2026-11-11
+
+screen-mark can now update itself, there is a Redact tool, Settings and History work from the keyboard and with a screen reader, and the overlay redraws only what changed. 2.2.1 has no updater, so install this release by hand; later ones can be installed from the tray menu or with `screen-mark update`.
 
 ### Added
 - **Redact tool** (`X`): a solid box that keeps nothing of what is under it. Pixelate keeps a block average, which is not always enough to hide text. A Pixelate drawn across a Redact box averages the box, never what it hides, whichever was drawn first. Black by default; select it and click a swatch to recolour. Fifteen tools now; `[shortcuts] redact` and `[toolbar] redact` in the config.

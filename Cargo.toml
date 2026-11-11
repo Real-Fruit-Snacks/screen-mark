@@ -1,6 +1,6 @@
 [package]
 name = "screen-mark"
-version = "2.2.1"
+version = "2.3.0"
 authors = ["Real-Fruit-Snacks"]
 description = "Screenshot capture and annotation in pure Rust"
 license = "MIT"
