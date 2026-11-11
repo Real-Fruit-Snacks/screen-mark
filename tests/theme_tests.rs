@@ -3,6 +3,12 @@
 //! every accent passes WCAG AA (>= 4.5:1) as text on the page background.
 
 use screen_mark::theme::{self, ThemeMode};
+use std::sync::Mutex;
+
+/// The theme mode is one setting for the whole process, and tests run in
+/// parallel: a test that switches it holds this, or another test can switch
+/// it between two reads (CI once measured Dark amber on the Light page).
+static MODE: Mutex<()> = Mutex::new(());
 
 fn lum((r, g, b): (u8, u8, u8)) -> f64 {
     fn ch(c: u8) -> f64 {
@@ -24,6 +30,7 @@ fn contrast(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
 
 #[test]
 fn nightshift_matches_brand_md() {
+    let _mode = MODE.lock().unwrap_or_else(|e| e.into_inner());
     theme::set_mode(ThemeMode::Dark);
     assert_eq!(theme::bg_0(), (0x0c, 0x0d, 0x10), "bg");
     assert_eq!(theme::bg_1(), (0x13, 0x15, 0x1a), "surface");
@@ -37,6 +44,7 @@ fn nightshift_matches_brand_md() {
 
 #[test]
 fn dayshift_matches_brand_md() {
+    let _mode = MODE.lock().unwrap_or_else(|e| e.into_inner());
     theme::set_mode(ThemeMode::Light);
     assert_eq!(theme::bg_0(), (0xf6, 0xf5, 0xf2), "bg");
     assert_eq!(theme::bg_1(), (0xff, 0xff, 0xff), "surface");
@@ -51,6 +59,7 @@ fn dayshift_matches_brand_md() {
 
 #[test]
 fn accents_pass_aa_on_every_surface_in_both_modes() {
+    let _mode = MODE.lock().unwrap_or_else(|e| e.into_inner());
     for mode in [ThemeMode::Dark, ThemeMode::Light] {
         theme::set_mode(mode);
         for (name, fg) in [
