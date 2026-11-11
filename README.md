@@ -70,7 +70,9 @@ The version that was replaced stays beside the new one, as `screen-mark.old.exe`
 
 How a copy updates depends on how it was installed. One screen-mark installed itself, or one unpacked from the zip or tar.gz, has its program file replaced. One installed with the MSI runs the new MSI, so Windows' list of installed apps stays right. A copy from Scoop, winget or Chocolatey, or in a folder screen-mark can't write to, is left alone: screen-mark says there is a new version and leaves installing it to the package manager, or to you.
 
-To update from somewhere other than GitHub, set `url` under `[updates]` to a web folder or a folder path that holds `latest.json`, `latest.json.sig` and the release's downloads. The `docs/downloads/` folder of the website zip is one. The signature is checked the same way, so plain `http://` or a file share is fine.
+To update from somewhere other than GitHub, set `url` under `[updates]` to a web folder or a folder path that holds `latest.json`, `latest.json.sig` and the release's downloads. The `docs/downloads/` folder of the website zip is one. A folder or share can also be picked with *Folder* next to *From* in Settings › General, and *GitHub* goes back. The signature is checked the same way, so plain `http://` or a file share is fine. `screen-mark update --from <folder or URL>` updates from somewhere else once, without changing the setting.
+
+Behind a proxy, updates use the one in `HTTPS_PROXY` / `HTTP_PROXY` (with `NO_PROXY`) or, on Windows, the one in Settings › Network & internet › Proxy. A proxy that a setup script (PAC) or automatic detection provides isn't read: put it in `proxy` under `[updates]` (`proxy = "http://proxy.example:8080"`), or `proxy = "none"` to go direct. Connections to GitHub are checked against the certificates built into screen-mark, not the ones Windows trusts, so a network that inspects HTTPS breaks them; on one of those, serve updates from an internal `http://` folder or a file share instead.
 
 ## Tested on
 
@@ -99,7 +101,7 @@ To update from somewhere other than GitHub, set `url` under `[updates]` to a web
 Everything on the release page works with no internet access. Only Imgur upload and looking for updates need a connection, and neither happens unless you ask for it.
 
 - **Windows:** the exe needs Windows 10 or later and nothing else, not even the Visual C++ Redistributable. The `.zip` and the MSI also carry this README, the changelog, the licence and `THIRD-PARTY-LICENSES.txt`.
-- **Linux:** the binary uses the system's GTK 3, libxdo and an AppIndicator library for the tray. On Ubuntu, install them with `sudo apt install libxdo3 libayatana-appindicator3-1` (GTK 3 comes with the desktop) before going offline.
+- **Linux:** the binary uses the system's GTK 3, libxdo, the X11 part of libxkbcommon (for the keyboard) and an AppIndicator library for the tray. Without libxkbcommon-x11 it stops at start with "Library libxkbcommon-x11.so could not be loaded". On Ubuntu, install them with `sudo apt install libxdo3 libxkbcommon-x11-0 libayatana-appindicator3-1` (GTK 3 comes with the desktop) before going offline.
 - **Website:** `screen-mark-vX.Y.Z-website.zip` is the whole site, with that release's downloads inside `docs/downloads/`, for an internal web server. Its `.gitlab-ci.yml` publishes it with GitLab Pages.
 - **Updates:** `docs/downloads/` in the website zip also holds `latest.json` and its signature, so the same internal server can serve updates. Point screen-mark at it with `url` under `[updates]` (see [Updating](#updating)).
 - **Checksums:** `SHA256SUMS.txt` lists every file on the release. Check with `sha256sum -c SHA256SUMS.txt --ignore-missing` on Linux, or compare `Get-FileHash <file>` in PowerShell.
@@ -164,6 +166,7 @@ measurement = false
 [updates]
 auto_check = false            # look for a new release after starting and once a day; never installs by itself
 url = ""                      # where releases are, when not GitHub: a web folder or a folder path
+proxy = ""                    # empty: HTTPS_PROXY / NO_PROXY, then Windows' proxy setting; or "http://host:port", or "none"
 ```
 
 The log is `%LocalAppData%\screen-mark\screen-mark.log` (Windows), `~/.local/share/screen-mark/screen-mark.log` (Linux), or `screen-mark.log` in `SCREEN_MARK_HOME`. When a capture can't start, the popup says why and a click on it shows the file. It holds messages and file paths, never image data, starts afresh at 1 MB, and keeps the one before as `.old`. `RUST_LOG=debug` makes it say more.

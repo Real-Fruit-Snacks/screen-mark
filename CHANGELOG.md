@@ -15,7 +15,8 @@ All notable changes to screen-mark will be documented in this file.
 - **Updating from inside screen-mark.** *Check for updates* in the tray menu looks for a newer release; if there is one the item becomes *Install screen-mark X.Y.Z*, which downloads it, puts it in place and restarts. `screen-mark update` does the same from a terminal, and `screen-mark update --check` only looks. Nothing is fetched unless you ask: *Check for a new version once a day* in Settings › General (`[updates] auto_check`) is off by default, and when it is on it tells you and installs nothing by itself.
   - A release is installed only if its `latest.json` is signed (Ed25519) with one of two keys compiled into screen-mark, each download has the size and SHA-256 that file gives, and the new program starts and reports the release's version. A release that isn't newer than the running one is never installed. The version that was replaced stays beside the new one until the new one has started.
   - A self-installed or unpacked copy has its program file replaced. A copy from the MSI runs the new MSI. A copy from Scoop, winget or Chocolatey, or in a folder screen-mark can't write to, is left alone.
-  - `[updates] url` points it at a web folder or a folder path instead of GitHub; the website zip's `docs/downloads/` is one, so an internal server can serve updates.
+  - `[updates] url` points it at a web folder or a folder path instead of GitHub; the website zip's `docs/downloads/` is one, so an internal server can serve updates. A folder can also be picked in Settings › General.
+  - Behind a proxy it uses `HTTPS_PROXY` / `HTTP_PROXY` with `NO_PROXY`, then on Windows the proxy in Windows' settings with its exceptions. `[updates] proxy` names one (or `none`) for a proxy set by a PAC script.
   - No new packages: the signature and checksum code is `ring` and the unpacking is `flate2`, both already in the tree.
 - Releases carry `latest.json` and `latest.json.sig`, written and signed by the release workflow (`.github/scripts/update-manifest.sh`). A tagged release fails before publishing if the signing key is missing or is not one screen-mark trusts.
 
@@ -34,6 +35,7 @@ All notable changes to screen-mark will be documented in this file.
 
 ### Fixed
 - **Spotlight was missing from the copied or saved image.** It showed in the overlay only.
+- **Linux: the install instructions missed `libxkbcommon-x11-0`.** Without it screen-mark stops as it starts ("Library libxkbcommon-x11.so could not be loaded"). The README and the website list it now. The same gap had kept the end-to-end tests from ever starting the app on CI since 2.1.0; a failed test now prints what the app logged.
 - Clicking somewhere else while typing a text annotation threw the text away; it now finishes the text. Copy, Save, Pin and Upload from the toolbar include text that is still being typed.
 - The text caret was white and invisible on a white page; it takes the text's colour.
 - A drag of a pixel or two left a selection too small to see, with the toolbar attached.

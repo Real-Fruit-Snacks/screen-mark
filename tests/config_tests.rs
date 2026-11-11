@@ -151,4 +151,13 @@ fn updates_are_off_and_from_github_unless_set() {
     let again: Config = toml::from_str(&toml::to_string(&set).unwrap()).unwrap();
     assert!(again.updates.auto_check);
     assert_eq!(again.updates.url, set.updates.url);
+
+    // The proxy follows the system unless it is set.
+    assert_eq!(cfg.updates.proxy, "");
+    assert_eq!(old.updates.proxy, "");
+    let proxied: Config =
+        toml::from_str("[updates]\nproxy = \"http://proxy.corp:8080\"\n").unwrap();
+    assert_eq!(proxied.updates.proxy, "http://proxy.corp:8080");
+    let again: Config = toml::from_str(&toml::to_string(&proxied).unwrap()).unwrap();
+    assert_eq!(again.updates.proxy, proxied.updates.proxy);
 }

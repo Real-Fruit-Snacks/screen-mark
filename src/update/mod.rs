@@ -19,10 +19,12 @@ pub mod apply;
 pub mod archive;
 pub mod keys;
 pub mod manifest;
+pub mod proxy;
 
 use std::fmt;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub use apply::{install, install_with, kind_of, remove_leftovers, running_copy, Kind};
@@ -125,6 +127,29 @@ pub enum Error {
     Install(String),
 }
 
+/// `[updates] proxy`, for every fetch this process makes. See `proxy`.
+static PROXY_SETTING: Mutex<String> = Mutex::new(String::new());
+
+/// Use `setting` (`[updates] proxy`) from now on: empty to follow the
+/// environment and Windows' settings, `none` for no proxy, or a proxy.
+pub fn set_proxy(setting: &str) {
+    if let Ok(mut current) = PROXY_SETTING.lock() {
+        *current = setting.trim().to_string();
+    }
+}
+
+/// The proxy a fetch of `url` goes through, if any.
+pub fn proxy_for(url: &str) -> Option<String> {
+    let setting = PROXY_SETTING.lock().map(|s| s.clone()).unwrap_or_default();
+    let system = proxy::system();
+    proxy::choose(
+        url,
+        &setting,
+        &|name| std::env::var(name).ok(),
+        system.as_ref(),
+    )
+}
+
 /// Where releases are fetched from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
@@ -177,7 +202,15 @@ impl Source {
         max: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
         let place = self.place(name, release);
-        let failed = |why: String| Error::Fetch(format!("couldn't read {place}: {why}"));
+        let proxy = match self {
+            Self::Folder(_) => None,
+            _ => proxy_for(&place),
+        };
+        let via = proxy
+            .as_deref()
+            .map(|p| format!(" through the proxy {}", proxy::shown(p)))
+            .unwrap_or_default();
+        let failed = |why: String| Error::Fetch(format!("couldn't read {place}{via}: {why}"));
         let reader: Box<dyn Read> = match self {
             Self::Folder(folder) => match std::fs::File::open(folder.join(name)) {
                 Ok(file) => Box::new(file),
@@ -185,11 +218,20 @@ impl Source {
                 Err(e) => return Err(failed(e.to_string())),
             },
             _ => {
-                let agent = ureq::AgentBuilder::new()
+                let mut agent = ureq::AgentBuilder::new()
                     .timeout_connect(Duration::from_secs(15))
                     .timeout_read(Duration::from_secs(30))
-                    .user_agent(concat!("screen-mark/", env!("CARGO_PKG_VERSION")))
-                    .build();
+                    .user_agent(concat!("screen-mark/", env!("CARGO_PKG_VERSION")));
+                if let Some(proxy) = &proxy {
+                    let parsed = ureq::Proxy::new(proxy).map_err(|e| {
+                        Error::Fetch(format!(
+                            "the proxy {} can't be used: {e}",
+                            proxy::shown(proxy)
+                        ))
+                    })?;
+                    agent = agent.proxy(parsed);
+                }
+                let agent = agent.build();
                 match agent.get(&place).call() {
                     Ok(response) => Box::new(response.into_reader()),
                     Err(ureq::Error::Status(404, _)) => return Ok(None),

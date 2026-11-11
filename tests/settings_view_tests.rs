@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use screen_mark::config::{Config, NotificationMode};
 use screen_mark::hotkey::Status;
 use screen_mark::keys::{Binding, Key, KeyId, KeyPress, Mods, Named};
-use screen_mark::settings_ui::{Action, MsgKind, Outcome, SettingsView, Tab};
+use screen_mark::settings_ui::{Action, MsgKind, Outcome, Picker, SettingsView, Tab};
 
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -456,6 +456,24 @@ fn looking_for_updates_is_off_until_switched_on() {
     assert!(v.config.updates.auto_check);
     click(&mut v, Action::ToggleUpdateCheck);
     assert!(!v.config.updates.auto_check);
+}
+
+#[test]
+fn updates_come_from_a_picked_folder_until_github_is_chosen_again() {
+    let _l = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut v = view();
+    assert_eq!(v.config.updates.url, "");
+    let share = r"\\server\tools\screen-mark".to_string();
+    v.picked_folder(Picker::UpdateFolder, share.clone());
+    assert_eq!(v.config.updates.url, share);
+    // The save folder is left alone, and the other way round.
+    assert!(v.config.general.save_directory.is_empty());
+    v.picked_folder(Picker::SaveFolder, r"D:\shots".into());
+    assert_eq!(v.config.updates.url, share);
+    snapshot(&mut v, "general-update-folder");
+    click(&mut v, Action::UpdatesFromGitHub);
+    assert_eq!(v.config.updates.url, "");
+    assert_eq!(v.config.general.save_directory, r"D:\shots");
 }
 
 #[test]

@@ -403,6 +403,7 @@ impl App {
     /// for only speaks up when there is something new.
     fn check_for_updates(&mut self, asked: bool) {
         lock(&self.update).stage = UpdateStage::Checking;
+        update::set_proxy(&self.config.updates.proxy);
         let status = Arc::clone(&self.update);
         let source = Source::from_setting(&self.config.updates.url);
         self.spawn_job(None, move || {
@@ -451,6 +452,7 @@ impl App {
 
     /// Download `release` and put it in place, on a worker thread.
     fn install_update(&mut self, event_loop: &ActiveEventLoop, release: Release) {
+        update::set_proxy(&self.config.updates.proxy);
         let version = release.version();
         let (exe, kind) = match update::running_copy() {
             Ok(found) => found,
@@ -2310,9 +2312,11 @@ fn run_cli_capture(clipboard: bool, save: Option<String>, delay: u64) {
 /// `screen-mark update`: look for a newer release and, unless `check_only`,
 /// install it.
 fn run_cli_update(check_only: bool, from: Option<String>) {
+    let config = Config::load();
+    update::set_proxy(&config.updates.proxy);
     let source = match from {
         Some(place) => Source::from_setting(&place),
-        None => Source::from_setting(&Config::load().updates.url),
+        None => Source::from_setting(&config.updates.url),
     };
     let running = Version::running();
     let release = match update::check(&source, running, &update::keys::trusted()) {

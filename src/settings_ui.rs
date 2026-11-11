@@ -72,6 +72,13 @@ const TABS: [(Tab, &str); 4] = [
 ];
 
 /// Something clickable.
+/// The settings a folder picker can fill in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picker {
+    SaveFolder,
+    UpdateFolder,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
     SwitchTab(Tab),
@@ -89,6 +96,8 @@ pub enum Action {
     ToggleAskWhere,
     BrowseDir,
     DefaultDir,
+    BrowseUpdateDir,
+    UpdatesFromGitHub,
     Notifications(NotificationMode),
     EditKey(KeyId),
     ResetKey(KeyId),
@@ -179,6 +188,8 @@ pub struct SettingsView {
     /// Global hotkey statuses (from the running app, updated on capture).
     statuses: HashMap<KeyId, Status>,
     browse_rx: Option<Receiver<Option<String>>>,
+    /// Which setting the open folder picker is for.
+    browse_for: Picker,
     autostart: bool,
     probe: fn(Binding) -> Status,
 }
@@ -208,6 +219,7 @@ impl SettingsView {
             message: None,
             statuses,
             browse_rx: None,
+            browse_for: Picker::SaveFolder,
             autostart: crate::autostart::is_enabled(),
             probe: crate::hotkey::check_available,
         }
@@ -547,19 +559,14 @@ impl SettingsView {
                 self.config.general.ask_where_to_save = Some(!now);
             }
             Action::BrowseDir => {
-                if self.browse_rx.is_none() {
-                    let (tx, rx) = channel();
-                    self.browse_rx = Some(rx);
-                    let start = self.config.save_folder();
-                    std::thread::spawn(move || {
-                        let mut dlg = rfd::FileDialog::new();
-                        if start.is_dir() {
-                            dlg = dlg.set_directory(&start);
-                        }
-                        let _ = tx.send(dlg.pick_folder().map(|p| p.to_string_lossy().to_string()));
-                    });
-                }
+                let start = self.config.save_folder();
+                self.pick_folder(start, Picker::SaveFolder);
             }
+            Action::BrowseUpdateDir => {
+                let start = std::path::PathBuf::from(self.config.updates.url.trim());
+                self.pick_folder(start, Picker::UpdateFolder);
+            }
+            Action::UpdatesFromGitHub => self.config.updates.url.clear(),
             Action::DefaultDir => {
                 // Keep Ctrl+S behaving as it did with the old folder.
                 let ask = self.config.ask_where_to_save();
@@ -768,11 +775,7 @@ impl SettingsView {
         };
         match rx.try_recv() {
             Ok(Some(dir)) => {
-                let ask = self.config.ask_where_to_save();
-                self.config.general.save_directory = dir;
-                // Picking a folder used to also mean "stop asking"; keep
-                // whatever the checkbox showed instead.
-                self.config.general.ask_where_to_save = Some(ask);
+                self.picked_folder(self.browse_for, dir);
                 self.browse_rx = None;
                 true
             }
@@ -786,6 +789,38 @@ impl SettingsView {
 
     pub fn browse_pending(&self) -> bool {
         self.browse_rx.is_some()
+    }
+
+    /// Open a folder picker on a worker thread, for `target`. One at a time.
+    fn pick_folder(&mut self, start: std::path::PathBuf, target: Picker) {
+        if self.browse_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.browse_rx = Some(rx);
+        self.browse_for = target;
+        std::thread::spawn(move || {
+            let mut dlg = rfd::FileDialog::new();
+            if start.is_dir() {
+                dlg = dlg.set_directory(&start);
+            }
+            let _ = tx.send(dlg.pick_folder().map(|p| p.to_string_lossy().to_string()));
+        });
+    }
+
+    /// Use `dir`, which the folder picker returned, for `target`. Public so
+    /// tests can stand in for the picker.
+    pub fn picked_folder(&mut self, target: Picker, dir: String) {
+        match target {
+            Picker::SaveFolder => {
+                let ask = self.config.ask_where_to_save();
+                self.config.general.save_directory = dir;
+                // Picking a folder used to also mean "stop asking"; keep
+                // whatever the checkbox showed instead.
+                self.config.general.ask_where_to_save = Some(ask);
+            }
+            Picker::UpdateFolder => self.config.updates.url = dir,
+        }
     }
 
     // ───────────── drawing ─────────────
@@ -971,7 +1006,7 @@ impl SettingsView {
                 Some(chosen),
             );
         }
-        y += 48.0;
+        y += 44.0;
 
         section(p, y, "Default thickness");
         y += 22.0;
@@ -985,7 +1020,7 @@ impl SettingsView {
             crate::theme::text_normal(),
         );
         self.button(p, LEFT + 88.0, y, 34.0, 26.0, "+", Action::ThicknessUp);
-        y += 46.0;
+        y += 42.0;
 
         section(p, y, "Appearance");
         y += 24.0;
@@ -998,7 +1033,7 @@ impl SettingsView {
                 ("Light", light, Action::ToggleTheme),
             ],
         );
-        y += 46.0;
+        y += 42.0;
 
         section(p, y, "System");
         y += 22.0;
@@ -1028,14 +1063,44 @@ impl SettingsView {
             updates,
             Action::ToggleUpdateCheck,
         );
-        y += 38.0;
+        y += 30.0;
 
-        section(p, y, "Imgur upload");
-        y += 22.0;
+        // Where updates come from. A web address is typed into config.toml;
+        // a folder (a share at work, say) can be picked here.
+        let from = self.config.updates.url.trim().to_string();
+        let shown = if from.is_empty() { "GitHub" } else { &from };
+        label(p, LEFT, y + 6.0, "From", 12.0, crate::theme::text_muted());
+        let btn_x = WIN_W as f32 - LEFT - 70.0 - 6.0 - 66.0;
+        let path_w = btn_x - (LEFT + 52.0) - 8.0;
+        let path = crate::toast::fit_middle(shown, 12.0, path_w);
+        label(
+            p,
+            LEFT + 52.0,
+            y + 6.0,
+            &path,
+            12.0,
+            crate::theme::text_normal(),
+        );
+        let picking = self.browse_rx.is_some() && self.browse_for == Picker::UpdateFolder;
+        let folder = if picking { "..." } else { "Folder" };
+        self.button(p, btn_x, y, 70.0, 26.0, folder, Action::BrowseUpdateDir);
+        if !from.is_empty() {
+            self.button(
+                p,
+                btn_x + 76.0,
+                y,
+                66.0,
+                26.0,
+                "GitHub",
+                Action::UpdatesFromGitHub,
+            );
+        }
+        y += 40.0;
+
         let imgur = if self.config.general.imgur_client_id.is_empty() {
-            "Not set up: add imgur_client_id to config.toml"
+            "Imgur upload: not set up (imgur_client_id in config.toml)"
         } else {
-            "Set up (client ID in config.toml)"
+            "Imgur upload: set up (client ID in config.toml)"
         };
         label(p, LEFT, y, imgur, 12.0, crate::theme::text_soft());
     }
@@ -1131,7 +1196,7 @@ impl SettingsView {
             12.0,
             crate::theme::text_normal(),
         );
-        let browse = if self.browse_rx.is_some() {
+        let browse = if self.browse_rx.is_some() && self.browse_for == Picker::SaveFolder {
             "..."
         } else {
             "Browse"
@@ -1612,6 +1677,8 @@ fn spoken_label(action: Action, drawn: &str) -> String {
         Action::ThicknessUp => "Thicker default line".to_string(),
         Action::BrowseDir => "Browse for the save folder".to_string(),
         Action::DefaultDir => "Use the default save folder".to_string(),
+        Action::BrowseUpdateDir => "Update from a folder".to_string(),
+        Action::UpdatesFromGitHub => "Update from GitHub".to_string(),
         Action::ToggleToolbar(_) => format!("Show {drawn} on the toolbar"),
         _ => drawn.to_string(),
     }

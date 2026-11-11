@@ -444,6 +444,11 @@ pub struct UpdatesConfig {
     /// `latest.json`, its signature and the downloads.
     #[serde(default)]
     pub url: String,
+    /// The proxy updates go through (`http://proxy:8080`), or `none`.
+    /// Empty: the `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` environment
+    /// variables, then on Windows the proxy in Windows' settings.
+    #[serde(default)]
+    pub proxy: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
