@@ -665,6 +665,129 @@ def test_switching_away_while_listening_brings_the_hotkeys_back(app):
 
 # ───────────── tray and settings helpers ─────────────
 
+def make_png(path, w, h, rgb):
+    from PIL import Image
+    Image.new("RGB", (w, h), rgb).save(path)
+
+
+def test_marking_up_an_image_file_saves_it(app_factory):
+    src = os.path.join(tempfile.mkdtemp(), "photo.png")
+    make_png(src, 300, 200, (10, 120, 200))
+    app = app_factory(
+        '[general]\nask_where_to_save = false\nfile_name = "edited-{width}x{height}"\n',
+        args=("edit", src))
+    wait_for(overlays, what="the editor")
+    time.sleep(0.4)
+    save_artifact(root_png(), "editor-open.png")
+    # The image is in the middle of the 1920x1080 screen, selected.
+    key("r")
+    drag(900, 480, 1000, 560)
+    key("ctrl+s")
+    wait_for(app.files, 5, what="the marked-up image")
+    assert app.files() == ["edited-300x200.png"], app.files()
+    from PIL import Image
+    img = Image.open(os.path.join(app.shots, "edited-300x200.png")).convert("RGB")
+    assert img.size == (300, 200), img.size
+    assert close(img.getpixel((5, 5)), (10, 120, 200)), img.getpixel((5, 5))
+    assert not close(img.getpixel((90, 40)), (10, 120, 200)), "the rectangle is in it"
+    wait_for(lambda: app.proc.poll() is not None, 10, what="the process to exit")
+    assert app.proc.returncode == 0, app.proc.returncode
+
+
+def test_a_cli_delay_counts_down_on_screen(app_factory):
+    out = os.path.join(tempfile.mkdtemp(), "later.png")
+    app = app_factory(DEFAULT, args=("capture", "--delay", "2", "--save", out))
+    wait_for(lambda: windows("screen-mark Countdown"), 3, what="the countdown")
+    wait_for(lambda: app.proc.poll() is not None, 8, what="the process to exit")
+    assert app.proc.returncode == 0, app.log()
+    from PIL import Image
+    img = Image.open(out).convert("RGB")
+    assert img.size == (W, H), img.size
+    # The countdown was in the middle of the screen; it is gone from the
+    # picture.
+    assert close(img.getpixel((930, 540)), LEFT_RGB), img.getpixel((930, 540))
+
+
+def test_send_hands_the_capture_to_the_command(app_factory):
+    sent = os.path.join(tempfile.mkdtemp(), "sent.png")
+    app = app_factory(f"""
+[general]
+notifications = "toast"
+[send]
+command = "sh -c 'cp \\"$0\\" {sent}; echo https://example.test/abc'"
+[keys]
+send = "Ctrl+Alt+U"
+""")
+    app.ready()
+    key("ctrl+shift+s")
+    wait_for(overlays, what="overlay")
+    time.sleep(0.3)
+    drag(200, 150, 600, 450)
+    time.sleep(0.2)
+    key("ctrl+alt+u")
+    wait_for(lambda: os.path.exists(sent) and os.path.getsize(sent) > 0, 6, what="the command's copy")
+    from PIL import Image
+    img = Image.open(sent)
+    assert abs(img.size[0] - 400) <= 2 and abs(img.size[1] - 300) <= 2, img.size
+    clip = lambda: subprocess.run(["xclip", "-o", "-selection", "clipboard"],
+                                  capture_output=True, text=True).stdout
+    wait_for(lambda: clip().strip() == "https://example.test/abc", 4, what="its output copied")
+
+
+def test_wayland_capture_goes_through_the_portal(app_factory):
+    tmp = tempfile.mkdtemp()
+    pic = os.path.join(tmp, "portal.png")
+    calls = os.path.join(tmp, "calls.txt")
+    portal = subprocess.Popen([dbus_python(), "-c", textwrap.dedent(f"""
+        import dbus, dbus.service, dbus.mainloop.glib
+        from gi.repository import GLib
+        from PIL import Image
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus = dbus.SessionBus()
+        name = dbus.service.BusName("org.freedesktop.portal.Desktop", bus)
+        class Req(dbus.service.Object):
+            @dbus.service.signal("org.freedesktop.portal.Request", signature="ua{{sv}}")
+            def Response(self, code, results):
+                pass
+        class Portal(dbus.service.Object):
+            @dbus.service.method("org.freedesktop.portal.Screenshot", in_signature="sa{{sv}}",
+                                 out_signature="o", sender_keyword="sender")
+            def Screenshot(self, parent, options, sender=None):
+                token = str(options.get("handle_token", "t"))
+                path = ("/org/freedesktop/portal/desktop/request/"
+                        + sender[1:].replace(".", "_") + "/" + token)
+                req = Req(bus, path)
+                open({calls!r}, "a").write("interactive=" + str(bool(options.get("interactive", True))) + "\\n")
+                # A new file, the way a portal makes one.
+                Image.new("RGB", (640, 360), (200, 30, 90)).save({pic!r})
+                def answer():
+                    req.Response(dbus.UInt32(0), dbus.Dictionary(
+                        {{"uri": dbus.String("file://" + {pic!r})}}, signature="sv"))
+                    return False
+                GLib.timeout_add(100, answer)
+                return dbus.ObjectPath(path)
+        Portal(bus, "/org/freedesktop/portal/desktop")
+        print("ready", flush=True)
+        GLib.MainLoop().run()
+    """)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert portal.stdout.readline().strip() == "ready"
+        out = os.path.join(tmp, "out.png")
+        app = app_factory(DEFAULT, extra_env={"SCREEN_MARK_CAPTURE": "portal"},
+                          args=("capture", "--save", out))
+        wait_for(lambda: app.proc.poll() is not None, 10, what="the process to exit")
+        assert app.proc.returncode == 0, app.log()
+        assert open(calls).read() == "interactive=False\n", open(calls).read()
+        from PIL import Image
+        img = Image.open(out).convert("RGB")
+        # Scaled to the X screen, which the overlay is drawn on.
+        assert img.size == (W, H), img.size
+        assert close(img.getpixel((W // 2, H // 2)), (200, 30, 90)), img.getpixel((W // 2, H // 2))
+        assert not os.path.exists(pic), "the portal's file is removed"
+    finally:
+        portal.kill()
+
+
 def tray_menu(app, index):
     """Open the tray menu and activate the index-th item (1-based)."""
     icon = wait_for(lambda: [w for w in windows("screen-mark") if geometry(w)[2] <= 32], 5,
@@ -679,7 +802,7 @@ def tray_menu(app, index):
 
 
 def open_settings_from_tray(app):
-    tray_menu(app, 11)  # Settings
+    tray_menu(app, 13)  # Settings
     sw = wait_for(lambda: windows("screen-mark Settings"), 5, what="settings window")[0]
     sh("xdotool", "windowactivate", "--sync", sw, check=False)
     sh("xdotool", "windowfocus", "--sync", sw, check=False)
@@ -716,6 +839,10 @@ CASES = [
      '[general]\nask_where_to_save = false\n[keys]\nsave = "Ctrl+Enter"\n'),
     (test_a_2_0_one_modifier_hotkey_still_registers, '[hotkey]\ncapture = "Alt+S"\n'),
     (test_switching_away_while_listening_brings_the_hotkeys_back, DEFAULT),
+    (test_marking_up_an_image_file_saves_it, None),
+    (test_a_cli_delay_counts_down_on_screen, None),
+    (test_send_hands_the_capture_to_the_command, None),
+    (test_wayland_capture_goes_through_the_portal, None),
 ]
 
 

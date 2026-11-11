@@ -36,6 +36,7 @@ impl ArrowTool {
             return None; // too small — likely a click, not a drag
         }
         Some(Annotation::Arrow {
+            style: super::ShapeStyle::Outline,
             start,
             end,
             color: self.color,

@@ -41,6 +41,7 @@ impl CircleTool {
             return None; // too small — likely a click, not a drag
         }
         Some(Annotation::Ellipse {
+            style: super::ShapeStyle::Outline,
             center,
             radius_x,
             radius_y,

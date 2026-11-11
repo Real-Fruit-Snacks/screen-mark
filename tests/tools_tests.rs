@@ -13,6 +13,7 @@ fn rectangle_produces_annotation() {
     assert!(ann.is_some());
     match ann.unwrap() {
         Annotation::Rectangle {
+            style: _,
             top_left,
             size,
             color,
@@ -52,6 +53,7 @@ fn arrow_produces_annotation() {
     assert!(ann.is_some());
     match ann.unwrap() {
         Annotation::Arrow {
+            style: _,
             start,
             end,
             color,
@@ -141,6 +143,7 @@ fn arrowhead_points_geometry() {
 fn render_annotation_draws_to_pixmap() {
     let mut pixmap = tiny_skia::Pixmap::new(200, 200).unwrap();
     let ann = Annotation::Rectangle {
+        style: Default::default(),
         top_left: Point::new(10.0, 10.0),
         size: Size::new(50.0, 50.0),
         color: Color::red(),
@@ -158,6 +161,7 @@ fn render_annotation_draws_to_pixmap() {
     // Also test arrow rendering
     let mut pixmap2 = tiny_skia::Pixmap::new(200, 200).unwrap();
     let ann2 = Annotation::Arrow {
+        style: Default::default(),
         start: Point::new(10.0, 100.0),
         end: Point::new(190.0, 100.0),
         color: Color::blue(),
@@ -183,6 +187,7 @@ fn circle_produces_annotation() {
     assert!(ann.is_some());
     match ann.unwrap() {
         Annotation::Ellipse {
+            style: _,
             center,
             radius_x,
             radius_y,
@@ -203,6 +208,7 @@ fn circle_produces_annotation() {
 fn circle_render_smoke_test() {
     let mut pixmap = tiny_skia::Pixmap::new(200, 200).unwrap();
     let ann = Annotation::Ellipse {
+        style: Default::default(),
         center: Point::new(100.0, 100.0),
         radius_x: 40.0,
         radius_y: 30.0,
@@ -229,6 +235,7 @@ fn line_produces_annotation() {
     assert!(ann.is_some());
     match ann.unwrap() {
         Annotation::Line {
+            style: _,
             start,
             end,
             color,
@@ -247,6 +254,7 @@ fn line_produces_annotation() {
 fn line_render_smoke_test() {
     let mut pixmap = tiny_skia::Pixmap::new(200, 200).unwrap();
     let ann = Annotation::Line {
+        style: Default::default(),
         start: Point::new(10.0, 100.0),
         end: Point::new(190.0, 100.0),
         color: Color::blue(),

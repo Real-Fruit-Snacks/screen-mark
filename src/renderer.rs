@@ -178,6 +178,10 @@ pub fn render_frame(
         state
             .tool(state.active_tool)
             .and_then(|tool| tool.in_progress_annotation())
+            .map(|mut a| {
+                crate::tools::restyle_annotation(&mut a, state.shape_style);
+                a
+            })
     };
     // Spotlights belong to the background: they change every pixel, but
     // only when one is added, moved or removed.
@@ -937,7 +941,7 @@ fn render_toolbar(
     let group = |button: usize| {
         BUTTONS.get(button).map(|def| match def.action {
             ButtonAction::Tool(_) => 0,
-            ButtonAction::Color(_) => 1,
+            ButtonAction::Color(_) | ButtonAction::Style => 1,
             _ => 2,
         })
     };
@@ -1014,7 +1018,15 @@ fn render_toolbar(
         }
 
         // --- SVG icon rendering for tool buttons and action buttons ---
-        if let Some(name) = def.icon {
+        let icon = match def.action {
+            ButtonAction::Style => Some(match state.shape_style {
+                crate::tools::ShapeStyle::Outline => "style-outline",
+                crate::tools::ShapeStyle::Dashed => "style-dashed",
+                crate::tools::ShapeStyle::Filled => "style-filled",
+            }),
+            _ => def.icon,
+        };
+        if let Some(name) = icon {
             let icon_size = (bw - 12.0).max(12.0) as u32;
             let active_hex = crate::theme::hex(crate::theme::text_normal());
             let inactive_hex = crate::theme::hex(crate::theme::text_muted());

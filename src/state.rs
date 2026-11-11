@@ -15,7 +15,7 @@ use crate::tools::rounded_rect::RoundedRectTool;
 use crate::tools::spotlight::SpotlightTool;
 use crate::tools::step_marker::StepMarkerTool;
 use crate::tools::text::TextTool;
-use crate::tools::{Annotation, AnnotationTool, ResizeHandle, ToolKind, UndoAction};
+use crate::tools::{Annotation, AnnotationTool, ResizeHandle, ShapeStyle, ToolKind, UndoAction};
 use crate::window_detect::WinRect;
 
 pub enum AppState {
@@ -95,6 +95,40 @@ pub struct OverlayState {
     /// A run of arrow-key nudges in progress: the annotation, and the
     /// length of the undo stack once its one undo step was recorded.
     pub nudging: Option<(usize, usize)>,
+    /// How new rectangles, circles, lines and arrows are drawn.
+    pub shape_style: ShapeStyle,
+    /// Marking up an image instead of a capture: where the image is in the
+    /// overlay. The selection stays inside it, so shrinking it crops.
+    pub canvas: Option<Selection>,
+    /// The name of the image being marked up, for the save dialog.
+    pub source_name: Option<String>,
+}
+
+/// The toolbar buttons to show: what `[toolbar]` keeps, without Send
+/// when no `[send] command` is set.
+fn visible_buttons(config: &crate::config::Config) -> Vec<usize> {
+    use crate::overlay::toolbar::{ButtonAction, BUTTONS};
+    let send = !config.send.command.trim().is_empty();
+    config
+        .toolbar
+        .visible_button_indices()
+        .into_iter()
+        .filter(|i| send || BUTTONS.get(*i).map(|b| b.action) != Some(ButtonAction::Send))
+        .collect()
+}
+
+/// The part of `sel` inside `canvas`, if it is bigger than a pixel or two.
+fn clip(sel: Selection, canvas: Selection) -> Option<Selection> {
+    let x0 = sel.x.max(canvas.x);
+    let y0 = sel.y.max(canvas.y);
+    let x1 = (sel.x + sel.width).min(canvas.x + canvas.width);
+    let y1 = (sel.y + sel.height).min(canvas.y + canvas.height);
+    (x1 - x0 > 2.0 && y1 - y0 > 2.0).then_some(Selection {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
+    })
 }
 
 impl OverlayState {
@@ -157,13 +191,16 @@ impl OverlayState {
             toast_message: None,
             toast_until: None,
             upload_confirmed: false,
-            visible_buttons: config.toolbar.visible_button_indices(),
+            visible_buttons: visible_buttons(config),
             window_pick: None,
             finish_on_release: config.general.finish_on_release,
             magnifier: config.general.magnifier,
             mods: crate::keys::Mods::NONE,
             draw_anchor: None,
             nudging: None,
+            shape_style: ShapeStyle::parse(&config.general.shape_style),
+            canvas: None,
+            source_name: None,
         }
     }
 
@@ -314,6 +351,57 @@ impl OverlayState {
             }
         }
         Some((cropped, r.w, r.h))
+    }
+
+    /// The selection as History keeps it editable: the clean pixels, and
+    /// the annotations moved to be relative to its corner. `None` when
+    /// there are no annotations; the saved picture is all there is then.
+    pub fn editable_selection(&self) -> Option<crate::history::Editable> {
+        if self.annotations.is_empty() {
+            return None;
+        }
+        let sel = self.selection.as_ref()?;
+        let r = sel.clamped(self.screenshot.width, self.screenshot.height);
+        let (pixels, width, height) = self.raw_selection()?;
+        let annotations = self
+            .annotations
+            .iter()
+            .map(|a| {
+                let mut a = a.clone();
+                crate::tools::move_annotation(&mut a, -(r.x as f32), -(r.y as f32));
+                a
+            })
+            .collect();
+        Some(crate::history::Editable {
+            pixels,
+            width,
+            height,
+            annotations,
+        })
+    }
+
+    /// Marking up an image: keep the selection on it. A selection that
+    /// reaches past the image is cut to it, and with none at all (a click
+    /// beside the image) the whole image is selected again.
+    pub fn keep_on_canvas(&mut self) {
+        let Some(canvas) = self.canvas else {
+            return;
+        };
+        if self.is_selecting {
+            if let Some(sel) = &mut self.selection {
+                *sel = clip(*sel, canvas).unwrap_or(Selection {
+                    width: 0.0,
+                    height: 0.0,
+                    ..*sel
+                });
+            }
+            return;
+        }
+        self.selection = Some(
+            self.selection
+                .and_then(|s| clip(s, canvas))
+                .unwrap_or(canvas),
+        );
     }
 
     /// Show an in-overlay toast for the given duration

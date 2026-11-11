@@ -5,6 +5,7 @@ use screen_mark::tools::{
 
 fn make_arrow() -> Annotation {
     Annotation::Arrow {
+        style: Default::default(),
         start: Point::new(0.0, 0.0),
         end: Point::new(100.0, 100.0),
         color: Color::red(),

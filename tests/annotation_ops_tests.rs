@@ -7,6 +7,7 @@ use screen_mark::tools::{
 
 fn make_arrow() -> Annotation {
     Annotation::Arrow {
+        style: Default::default(),
         start: Point::new(10.0, 10.0),
         end: Point::new(110.0, 10.0),
         color: Color::red(),
@@ -16,6 +17,7 @@ fn make_arrow() -> Annotation {
 
 fn make_line() -> Annotation {
     Annotation::Line {
+        style: Default::default(),
         start: Point::new(0.0, 0.0),
         end: Point::new(100.0, 0.0),
         color: Color::blue(),
@@ -25,6 +27,7 @@ fn make_line() -> Annotation {
 
 fn make_rectangle() -> Annotation {
     Annotation::Rectangle {
+        style: Default::default(),
         top_left: Point::new(20.0, 20.0),
         size: Size::new(80.0, 60.0),
         color: Color::red(),
@@ -34,6 +37,7 @@ fn make_rectangle() -> Annotation {
 
 fn make_rounded_rect() -> Annotation {
     Annotation::RoundedRect {
+        style: Default::default(),
         top_left: Point::new(20.0, 20.0),
         size: Size::new(80.0, 60.0),
         color: Color::red(),
@@ -44,6 +48,7 @@ fn make_rounded_rect() -> Annotation {
 
 fn make_ellipse() -> Annotation {
     Annotation::Ellipse {
+        style: Default::default(),
         center: Point::new(100.0, 100.0),
         radius_x: 40.0,
         radius_y: 30.0,

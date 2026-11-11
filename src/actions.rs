@@ -10,6 +10,8 @@ use crate::toast::{make_thumb, Click, Kind, Spec, CLICK_HINT};
 /// * `save_to`: folder to write a uniquely named PNG into, if any.
 /// * `copy`: put the image on the clipboard.
 /// * `history`: also keep it in the recent-captures history.
+/// * `markup`: what keeps that history entry editable (see
+///   `history::Editable`), when it has annotations.
 ///
 /// A failure in one step never skips the other: a full disk still copies,
 /// a busy clipboard still saves. The message says exactly which part failed.
@@ -20,22 +22,33 @@ pub fn finish_capture(
     save_to: Option<&Path>,
     copy: bool,
     history: bool,
+    markup: Option<&crate::history::Editable>,
 ) -> Spec {
     let saved: Option<Result<PathBuf, String>> =
         save_to.map(|dir| crate::export::save_capture(pixels, w, h, dir));
     let copied: Option<Result<(), String>> =
         copy.then(|| crate::export::copy_to_clipboard(pixels, w, h));
     if history {
-        match &saved {
-            Some(Ok(p)) => {
-                let _ = crate::history::save_to_history_from_file(p);
-            }
-            _ => {
-                let _ = crate::history::save_to_history(pixels, w, h);
-            }
-        }
+        let kept = match &saved {
+            Some(Ok(p)) => crate::history::save_to_history_from_file(p),
+            _ => crate::history::save_to_history(pixels, w, h),
+        };
+        keep_markup(kept, markup);
     }
     describe(saved, copied, w, h).thumb(make_thumb(pixels, w, h, 192, 120))
+}
+
+/// Keep a history entry editable, if it was saved and has annotations.
+pub fn keep_markup(kept: Result<PathBuf, String>, markup: Option<&crate::history::Editable>) {
+    match (kept, markup) {
+        (Ok(png), Some(m)) => {
+            if let Err(e) = crate::history::write_markup(&png, m) {
+                tracing::warn!("{e}");
+            }
+        }
+        (Err(e), _) => tracing::warn!("Couldn't add the capture to History: {e}"),
+        (Ok(_), None) => {}
+    }
 }
 
 /// The popup for a save/copy outcome (no thumbnail).

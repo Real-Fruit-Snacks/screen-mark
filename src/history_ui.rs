@@ -1,12 +1,14 @@
-//! The History window: thumbnails of the last captures; click one to copy
-//! it again.
+//! The History window: thumbnails of the last captures. Click one to copy
+//! it again; the buttons along the bottom act on the one clicked last:
+//! copy, mark up again, save as, show in folder, delete.
 //!
 //! `HistoryView` holds the state and draws into a `Pixmap`; it takes clicks
 //! (logical pixels) and key presses, and needs no window, so tests can drive
 //! it. `HistoryWindow` wraps it with a winit window and a softbuffer surface.
 //!
 //! Keyboard: the arrow keys move between captures (Tab and Shift+Tab too),
-//! Enter or Space copies the focused one, Esc closes.
+//! Enter or Space copies the focused one, E marks it up, S saves it
+//! somewhere, O shows it in its folder, Delete deletes it, Esc closes.
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -32,6 +34,12 @@ const THUMB_H: u32 = 80;
 const PADDING: f32 = 16.0;
 const GAP: f32 = 12.0;
 const HEADER_H: f32 = 44.0;
+/// The bar of buttons along the bottom.
+const FOOTER_H: f32 = 48.0;
+/// Where the thumbnails stop.
+const FOOTER_TOP: f32 = WIN_H as f32 - FOOTER_H;
+const BUTTON_H: f32 = 28.0;
+const BUTTON_GAP: f32 = 8.0;
 
 /// The "Clear All" button in the header: (x, y, w, h).
 const CLEAR_RECT: (f32, f32, f32, f32) = (WIN_W as f32 - PADDING - 80.0, 10.0, 80.0, 24.0);
@@ -42,6 +50,56 @@ struct Thumbnail {
     pixels: Vec<u8>,
     width: u32,
     height: u32,
+    /// Its annotations were kept, so marking it up can change them.
+    editable: bool,
+}
+
+/// The buttons along the bottom, which act on the current capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    Copy,
+    Edit,
+    SaveAs,
+    Show,
+    Delete,
+}
+
+impl Act {
+    pub const ALL: [Act; 5] = [Act::Copy, Act::Edit, Act::SaveAs, Act::Show, Act::Delete];
+
+    fn label(self) -> &'static str {
+        match self {
+            Act::Copy => "Copy",
+            Act::Edit => "Mark up",
+            Act::SaveAs => "Save as...",
+            Act::Show => "Show in folder",
+            Act::Delete => "Delete",
+        }
+    }
+
+    /// What a screen reader says the button does, for capture `n`.
+    fn spoken(self, n: usize) -> String {
+        match self {
+            Act::Copy => format!("Copy capture {n}"),
+            Act::Edit => format!("Mark up capture {n} again"),
+            Act::SaveAs => format!("Save capture {n} as a file"),
+            Act::Show => format!("Show capture {n} in its folder"),
+            Act::Delete => format!("Delete capture {n} from History"),
+        }
+    }
+
+    /// Where the button is: (x, y, w, h), in logical pixels.
+    pub fn rect(self) -> (f32, f32, f32, f32) {
+        let mut x = PADDING;
+        for act in Act::ALL {
+            let w = measure_text_width(act.label(), 12.0) + 24.0;
+            if act == self {
+                return (x, FOOTER_TOP + (FOOTER_H - BUTTON_H) / 2.0, w, BUTTON_H);
+            }
+            x += w + BUTTON_GAP;
+        }
+        (x, FOOTER_TOP, 0.0, 0.0)
+    }
 }
 
 /// What has keyboard focus.
@@ -50,6 +108,8 @@ pub enum Focus {
     ClearAll,
     /// A capture, newest first.
     Capture(usize),
+    /// A button along the bottom.
+    Action(Act),
 }
 
 /// What the caller should do after an input.
@@ -60,6 +120,12 @@ pub enum Outcome {
     Close,
     /// Copy this capture to the clipboard and say so.
     Copy(PathBuf),
+    /// Open this capture in the editor.
+    Edit(PathBuf),
+    /// Ask where to save a copy of this capture, and save it there.
+    SaveAs(PathBuf),
+    /// Show this capture in the file manager.
+    Show(PathBuf),
 }
 
 /// All History state, no window.
@@ -73,6 +139,10 @@ pub struct HistoryView {
     focus: Option<Focus>,
     /// Draw the focus ring. Set by the keyboard, cleared by the mouse.
     focus_ring: bool,
+    /// The capture the buttons along the bottom act on: the one clicked or
+    /// focused last.
+    current: Option<usize>,
+    hover_action: Option<Act>,
 }
 
 impl Default for HistoryView {
@@ -92,7 +162,14 @@ impl HistoryView {
             scroll_offset: 0.0,
             focus: None,
             focus_ring: false,
+            current: None,
+            hover_action: None,
         }
+    }
+
+    /// The capture the buttons act on, newest first.
+    pub fn current(&self) -> Option<usize> {
+        self.current.filter(|i| *i < self.thumbnails.len())
     }
 
     /// How many captures are shown.
@@ -144,7 +221,7 @@ impl HistoryView {
     }
 
     fn max_scroll(&self) -> f32 {
-        (self.content_height() - (WIN_H as f32 - HEADER_H)).max(0.0)
+        (self.content_height() - (FOOTER_TOP - HEADER_H)).max(0.0)
     }
 
     // ───────────── input ─────────────
@@ -160,14 +237,22 @@ impl HistoryView {
     /// highlighted changed.
     pub fn hover(&mut self, x: f32, y: f32) -> bool {
         self.cursor = (x, y);
-        let before = (self.hovered, self.hover_clear);
+        let before = (self.hovered, self.hover_clear, self.hover_action);
         self.hover_clear = self.clear_rect().is_some_and(|r| within(r, x, y));
         self.hovered = self.capture_at(x, y);
-        before != (self.hovered, self.hover_clear)
+        self.hover_action = self.action_at(x, y);
+        before != (self.hovered, self.hover_clear, self.hover_action)
+    }
+
+    fn action_at(&self, x: f32, y: f32) -> Option<Act> {
+        if self.thumbnails.is_empty() {
+            return None;
+        }
+        Act::ALL.into_iter().find(|a| within(a.rect(), x, y))
     }
 
     fn capture_at(&self, x: f32, y: f32) -> Option<usize> {
-        if y < HEADER_H {
+        if !(HEADER_H..FOOTER_TOP).contains(&y) {
             return None;
         }
         (0..self.thumbnails.len()).find(|i| within(self.thumb_rect(*i), x, y))
@@ -181,6 +266,10 @@ impl HistoryView {
         if self.clear_rect().is_some_and(|r| within(r, x, y)) {
             self.focus = Some(Focus::ClearAll);
             return self.press(Focus::ClearAll);
+        }
+        if let Some(act) = self.action_at(x, y) {
+            self.focus = Some(Focus::Action(act));
+            return self.press(Focus::Action(act));
         }
         match self.capture_at(x, y) {
             Some(i) => {
@@ -205,12 +294,54 @@ impl HistoryView {
                 self.hovered = None;
                 self.hover_clear = false;
                 self.focus = None;
+                self.current = None;
                 Outcome::Redraw
             }
             Focus::Capture(i) => match self.thumbnails.get(i) {
-                Some(thumb) => Outcome::Copy(thumb.path.clone()),
+                Some(thumb) => {
+                    self.current = Some(i);
+                    Outcome::Copy(thumb.path.clone())
+                }
                 None => Outcome::Nothing,
             },
+            Focus::Action(act) => self.act(act),
+        }
+    }
+
+    /// What a button along the bottom does, to the current capture.
+    pub fn act(&mut self, act: Act) -> Outcome {
+        let Some(i) = self.current() else {
+            return Outcome::Nothing;
+        };
+        let path = self.thumbnails[i].path.clone();
+        match act {
+            Act::Copy => Outcome::Copy(path),
+            Act::Edit => Outcome::Edit(path),
+            Act::SaveAs => Outcome::SaveAs(path),
+            Act::Show => Outcome::Show(path),
+            Act::Delete => {
+                if let Err(e) = crate::history::delete_entry(&path) {
+                    tracing::error!("{e}");
+                    return Outcome::Nothing;
+                }
+                tracing::info!("Deleted {} from History", path.display());
+                self.thumbnails.remove(i);
+                self.hovered = None;
+                if self.thumbnails.is_empty() {
+                    self.current = None;
+                    self.focus = None;
+                    self.scroll_offset = 0.0;
+                    return Outcome::Redraw;
+                }
+                // The next capture takes its place.
+                let next = i.min(self.thumbnails.len() - 1);
+                self.current = Some(next);
+                if self.focus == Some(Focus::Capture(i)) {
+                    self.focus = Some(Focus::Capture(next));
+                }
+                self.scroll_offset = self.scroll_offset.clamp(0.0, self.max_scroll());
+                Outcome::Redraw
+            }
         }
     }
 
@@ -219,20 +350,38 @@ impl HistoryView {
         if !press.pressed {
             return Outcome::Nothing;
         }
-        let Some(Key::Named(key)) = press.key else {
-            return Outcome::Nothing;
-        };
-        let count = self.thumbnails.len();
         let mods = press.mods;
         if mods.has_command() {
             return Outcome::Nothing;
         }
+        let count = self.thumbnails.len();
+        // Letters for the buttons, on the capture that has focus (or was
+        // clicked last).
+        if let Some(Key::Char(c)) = press.key {
+            let act = match c {
+                'e' => Act::Edit,
+                's' => Act::SaveAs,
+                'o' => Act::Show,
+                _ => return Outcome::Nothing,
+            };
+            self.focus_ring = true;
+            return self.act(act);
+        }
+        let Some(Key::Named(key)) = press.key else {
+            return Outcome::Nothing;
+        };
         if key == Named::Escape {
             return Outcome::Close;
         }
         if count == 0 {
             return Outcome::Nothing;
         }
+        if key == Named::Delete {
+            self.focus_ring = true;
+            return self.act(Act::Delete);
+        }
+        let acts = Act::ALL;
+        let at = |a: Act| acts.iter().position(|x| *x == a).unwrap_or(0);
         let next = match (key, self.focus) {
             (Named::Enter | Named::Space, Some(focus)) => {
                 self.focus_ring = true;
@@ -245,38 +394,65 @@ impl HistoryView {
                 Named::Tab | Named::Right | Named::Left | Named::Down | Named::Up | Named::Home,
                 None,
             ) => Focus::Capture(0),
+            (Named::End, Some(Focus::Action(_))) => Focus::Action(acts[acts.len() - 1]),
+            (Named::Home, Some(Focus::Action(_))) => Focus::Action(acts[0]),
             (Named::End, _) => Focus::Capture(count - 1),
             (Named::Home, _) => Focus::Capture(0),
 
-            // Tab walks everything in reading order, the button first.
-            (Named::Tab, Some(Focus::ClearAll)) if mods.shift() => Focus::Capture(count - 1),
+            // Tab walks everything in reading order: the button at the
+            // top, the captures, the buttons along the bottom.
+            (Named::Tab, Some(Focus::ClearAll)) if mods.shift() => {
+                Focus::Action(acts[acts.len() - 1])
+            }
             (Named::Tab, Some(Focus::ClearAll)) => Focus::Capture(0),
             (Named::Tab, Some(Focus::Capture(0))) if mods.shift() => Focus::ClearAll,
             (Named::Tab, Some(Focus::Capture(i))) if mods.shift() => Focus::Capture(i - 1),
-            (Named::Tab, Some(Focus::Capture(i))) if i + 1 == count => Focus::ClearAll,
+            (Named::Tab, Some(Focus::Capture(i))) if i + 1 == count => Focus::Action(acts[0]),
             (Named::Tab, Some(Focus::Capture(i))) => Focus::Capture(i + 1),
+            (Named::Tab, Some(Focus::Action(a))) if mods.shift() => match at(a) {
+                0 => Focus::Capture(self.current().unwrap_or(count - 1)),
+                n => Focus::Action(acts[n - 1]),
+            },
+            (Named::Tab, Some(Focus::Action(a))) => match acts.get(at(a) + 1) {
+                Some(next) => Focus::Action(*next),
+                None => Focus::ClearAll,
+            },
 
-            // Arrows move on the grid; up from the top row is the button.
+            // Arrows move on the grid; up from the top row is the button,
+            // down from the bottom row the buttons along the bottom.
             (Named::Right, Some(Focus::Capture(i))) => Focus::Capture((i + 1).min(count - 1)),
             (Named::Left, Some(Focus::Capture(i))) => Focus::Capture(i.saturating_sub(1)),
             (Named::Down, Some(Focus::Capture(i))) if i + COLS < count => Focus::Capture(i + COLS),
+            (Named::Down, Some(Focus::Capture(_))) => Focus::Action(acts[0]),
             (Named::Up, Some(Focus::Capture(i))) if i >= COLS => Focus::Capture(i - COLS),
             (Named::Up, Some(Focus::Capture(_))) => Focus::ClearAll,
             (Named::Down | Named::Right, Some(Focus::ClearAll)) => Focus::Capture(0),
+            (Named::Right, Some(Focus::Action(a))) => {
+                Focus::Action(acts[(at(a) + 1).min(acts.len() - 1)])
+            }
+            (Named::Left, Some(Focus::Action(a))) => Focus::Action(acts[at(a).saturating_sub(1)]),
+            (Named::Up, Some(Focus::Action(_))) => {
+                Focus::Capture(self.current().unwrap_or(count - 1))
+            }
             _ => return Outcome::Nothing,
         };
+        if self.focus == Some(next) {
+            return Outcome::Nothing;
+        }
         self.set_focus(next);
         Outcome::Redraw
     }
 
     /// Focus a control with the ring showing, scrolling a capture into view.
+    /// A focused capture becomes the one the buttons act on.
     pub fn set_focus(&mut self, focus: Focus) {
         self.focus = Some(focus);
         self.focus_ring = true;
         if let Focus::Capture(i) = focus {
+            self.current = Some(i);
             let (_, y, _, h) = self.thumb_rect(i);
             let top = HEADER_H + PADDING;
-            let bottom = WIN_H as f32 - PADDING;
+            let bottom = FOOTER_TOP - PADDING;
             if y < top {
                 self.scroll_offset -= top - y;
             } else if y + h > bottom {
@@ -295,6 +471,9 @@ impl HistoryView {
             order.push(Focus::ClearAll);
         }
         order.extend((0..self.thumbnails.len()).map(Focus::Capture));
+        if !self.thumbnails.is_empty() {
+            order.extend(Act::ALL.map(Focus::Action));
+        }
         order
     }
 
@@ -314,21 +493,36 @@ impl HistoryView {
                 },
                 Focus::Capture(i) => {
                     let rect = self.thumb_rect(i);
-                    let in_view = rect.1 >= HEADER_H && rect.1 + rect.3 <= WIN_H as f32;
+                    let in_view = rect.1 >= HEADER_H && rect.1 + rect.3 <= FOOTER_TOP;
                     Control {
                         role: Role::Button,
                         label: format!(
-                            "Capture {} of {count}{}. Copy it again",
+                            "Capture {} of {count}{}{}. Copy it again",
                             i + 1,
                             capture_time(&self.thumbnails[i].path)
                                 .map(|t| format!(", taken {t}"))
-                                .unwrap_or_default()
+                                .unwrap_or_default(),
+                            if self.thumbnails[i].editable {
+                                ", its annotations can be changed"
+                            } else {
+                                ""
+                            }
                         ),
                         checked: None,
                         value: None,
                         rect: in_view.then_some(rect),
                     }
                 }
+                Focus::Action(act) => Control {
+                    role: Role::Button,
+                    label: match self.current() {
+                        Some(i) => act.spoken(i + 1),
+                        None => format!("{} (pick a capture first)", act.label()),
+                    },
+                    checked: None,
+                    value: None,
+                    rect: Some(act.rect()),
+                },
             })
             .collect();
         Snapshot {
@@ -396,13 +590,15 @@ impl HistoryView {
                     continue;
                 }
 
-                // Border: accent when hovered or focused, wider for focus.
+                // Border: accent when hovered, focused or the one the
+                // buttons act on; wider for focus.
                 let focused = ring(Focus::Capture(i));
-                let border_color = if focused || self.hovered == Some(i) {
-                    crate::theme::accent()
-                } else {
-                    crate::theme::bg_3()
-                };
+                let border_color =
+                    if focused || self.hovered == Some(i) || self.current() == Some(i) {
+                        crate::theme::accent()
+                    } else {
+                        crate::theme::bg_3()
+                    };
                 let b = if focused { 4.0 } else { 2.0 };
                 fill_rect_rgb(
                     &mut pixmap,
@@ -428,7 +624,7 @@ impl HistoryView {
             // Scrollbar indicator when the content overflows
             let max_scroll = self.max_scroll();
             if max_scroll > 0.0 {
-                let viewport_h = WIN_H as f32 - HEADER_H;
+                let viewport_h = FOOTER_TOP - HEADER_H;
                 let track_h = viewport_h - 8.0;
                 let knob_h = (viewport_h / self.content_height() * track_h).max(24.0);
                 let knob_y =
@@ -440,6 +636,85 @@ impl HistoryView {
                     3.0,
                     knob_h,
                     crate::theme::bg_4(),
+                );
+            }
+        }
+
+        // The buttons along the bottom, over any thumbnail scrolled under
+        // them.
+        if !self.thumbnails.is_empty() {
+            fill_rect_rgb(
+                &mut pixmap,
+                0.0,
+                FOOTER_TOP,
+                WIN_W as f32,
+                FOOTER_H,
+                crate::theme::bg_1(),
+            );
+            fill_rect_rgb(
+                &mut pixmap,
+                PADDING,
+                FOOTER_TOP,
+                WIN_W as f32 - PADDING * 2.0,
+                1.0,
+                crate::theme::bg_3(),
+            );
+            let live = self.current().is_some();
+            for act in Act::ALL {
+                let (bx, by, bw, bh) = act.rect();
+                if ring(Focus::Action(act)) {
+                    fill_rect_rgb(
+                        &mut pixmap,
+                        bx - 3.0,
+                        by - 3.0,
+                        bw + 6.0,
+                        bh + 6.0,
+                        crate::theme::accent(),
+                    );
+                    fill_rect_rgb(
+                        &mut pixmap,
+                        bx - 1.0,
+                        by - 1.0,
+                        bw + 2.0,
+                        bh + 2.0,
+                        crate::theme::bg_1(),
+                    );
+                }
+                let bg = if live && self.hover_action == Some(act) {
+                    crate::theme::bg_4()
+                } else {
+                    crate::theme::bg_3()
+                };
+                fill_rect_rgb(&mut pixmap, bx, by, bw, bh, bg);
+                let label = act.label();
+                let tw = measure_text_width(label, 12.0);
+                // Greyed out until a capture is picked.
+                let ink = if live {
+                    crate::theme::text_normal()
+                } else {
+                    crate::theme::text_muted()
+                };
+                draw_label(
+                    &mut pixmap,
+                    bx + (bw - tw) / 2.0,
+                    by + 7.0,
+                    label,
+                    12.0,
+                    ink,
+                );
+            }
+            if !live {
+                let hint = "Click a capture to pick it";
+                let tw = measure_text_width(hint, 12.0);
+                let (lx, ly, lw, _) = Act::Delete.rect();
+                let x = (WIN_W as f32 - PADDING - tw).max(lx + lw + BUTTON_GAP);
+                draw_label(
+                    &mut pixmap,
+                    x,
+                    ly + 7.0,
+                    hint,
+                    12.0,
+                    crate::theme::text_muted(),
                 );
             }
         }
@@ -614,6 +889,33 @@ pub fn copy_capture(path: &std::path::Path) -> crate::toast::Spec {
     crate::actions::describe(None, Some(copied), w, h)
 }
 
+/// Ask where to save a copy of a history capture, and save it there.
+/// Returns the popup to show; `None` if the dialog was cancelled. Runs on
+/// a worker thread (the dialog blocks it).
+pub fn save_capture_as(path: &std::path::Path) -> Option<crate::toast::Spec> {
+    use crate::toast::{Kind, Spec};
+    let image = match image::open(path) {
+        Ok(image) => image.to_rgba8(),
+        Err(e) => {
+            tracing::error!("Failed to open history image {}: {e}", path.display());
+            return Some(Spec::new(
+                Kind::Error,
+                "Couldn't save",
+                "That capture is gone from History",
+            ));
+        }
+    };
+    let (w, h) = image.dimensions();
+    let thumb = crate::toast::make_thumb(image.as_raw(), w, h, 192, 120);
+    match crate::export::save_to_file(image.into_raw(), w, h, None, None) {
+        Ok(Some(saved)) => {
+            Some(crate::actions::describe(Some(Ok(PathBuf::from(saved))), None, w, h).thumb(thumb))
+        }
+        Ok(None) => None,
+        Err(e) => Some(crate::actions::describe(Some(Err(e)), None, w, h)),
+    }
+}
+
 fn load_thumbnails() -> Vec<Thumbnail> {
     crate::history::list_history()
         .into_iter()
@@ -623,6 +925,7 @@ fn load_thumbnails() -> Vec<Thumbnail> {
             let rgba = thumb.to_rgba8();
             let (w, h) = rgba.dimensions();
             Some(Thumbnail {
+                editable: crate::history::has_markup(&path),
                 path,
                 pixels: rgba.into_raw(),
                 width: w,

@@ -158,6 +158,7 @@ fn a_spotlight_dims_everything_outside_it_and_annotations_stay_bright() {
     let mut o = overlay();
     o.annotations = vec![
         Annotation::Rectangle {
+            style: Default::default(),
             top_left: Point::new(300.0, 200.0),
             size: Size::new(80.0, 50.0),
             color: Color::red(),
@@ -301,6 +302,7 @@ fn the_region_on_screen_is_pixel_for_pixel_what_gets_copied() {
             size: Size::new(220.0, 120.0),
         },
         Annotation::Arrow {
+            style: Default::default(),
             start: Point::new(90.0, 220.0),
             end: Point::new(260.0, 150.0),
             color: presets[0],

@@ -55,6 +55,17 @@ fn get_svg(name: &str) -> Option<String> {
             r#"<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>"#
         }
         "rounded-rect" => r#"<rect x="3" y="3" width="18" height="18" rx="5"/>"#,
+        // The shape style button shows the style that is on now.
+        "style-outline" => r#"<rect x="4" y="4" width="16" height="16" rx="1"/>"#,
+        "style-dashed" => {
+            r#"<rect x="4" y="4" width="16" height="16" rx="1" stroke-dasharray="4 3"/>"#
+        }
+        "style-filled" => {
+            r#"<rect x="4" y="4" width="16" height="16" rx="1" fill="currentColor"/>"#
+        }
+        "send" => {
+            r#"<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>"#
+        }
         "ocr" => {
             r#"<path d="M4 7V4h3"/><path d="M17 4h3v3"/><path d="M4 17v3h3"/><path d="M17 20h3v-3"/><path d="M7 8h10"/><path d="M7 12h10"/><path d="M7 16h10"/>"#
         }

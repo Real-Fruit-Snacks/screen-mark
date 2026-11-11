@@ -84,8 +84,21 @@ struct App {
     /// Wakes the event loop when a worker finishes.
     proxy: Option<EventLoopProxy<()>>,
     pinned_windows: Vec<PinnedWindow>,
-    immediate_capture: bool,
+    /// What a command-line run (`capture`, `edit`) does once the event
+    /// loop is up.
+    startup: Option<Startup>,
     cli_only: bool,
+    /// `capture --clipboard` / `--save` with a delay: what to do with the
+    /// capture once the countdown is over.
+    cli_grab: Option<(bool, Option<String>)>,
+    /// The exit code of a command-line run.
+    exit_code: i32,
+    /// What the countdown starts when it reaches 0.
+    countdown_kind: CaptureKind,
+    /// Images read on a worker thread (a file, a History capture), to mark
+    /// up, with the name the save dialog suggests.
+    opened_tx: Sender<Opened>,
+    opened_rx: Receiver<Opened>,
     startup_notified: bool,
     countdown: Option<Countdown>,
     /// Where the last region capture was on screen, for the last-region
@@ -97,6 +110,9 @@ struct App {
     /// `access`). Each lives as long as its window and is dropped first.
     settings_access: Option<Bridge>,
     history_access: Option<Bridge>,
+    /// The same for the capture overlay: its toolbar and where things
+    /// stand (see `overlay::describe`).
+    overlay_access: Option<Bridge>,
     /// Where an update stands, shared with the threads that check and
     /// install (see `update_clicked`).
     update: Arc<Mutex<UpdateStatus>>,
@@ -188,6 +204,22 @@ const SETTINGS_BLUR_GRACE: Duration = Duration::from_millis(1500);
 /// How long the tray menu takes to leave the screen after a click.
 const TRAY_MENU_CLOSE_DELAY: Duration = Duration::from_millis(250);
 
+/// An image read to mark up, and the name the save dialog suggests for it;
+/// or why it couldn't be read.
+type Opened = Result<(screen_mark::history::Editable, Option<String>), String>;
+
+/// What a command-line run does once the event loop is up.
+enum Startup {
+    /// `screen-mark capture`: open the overlay, after a countdown of this
+    /// many seconds.
+    Overlay(u32),
+    /// `screen-mark capture --clipboard` / `--save` with a delay: count
+    /// down, then capture.
+    Grab(u32),
+    /// `screen-mark edit`: mark up this image.
+    Edit(Box<screen_mark::history::Editable>, Option<String>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureKind {
     /// Open the overlay to drag a region.
@@ -198,14 +230,18 @@ enum CaptureKind {
     Screenshot,
     /// One press: grab the area of the last region capture again, save, copy.
     LastRegion,
+    /// `capture --clipboard` / `--save` after a countdown (see `cli_grab`).
+    CliGrab,
 }
 
 impl App {
     fn new(config: Config) -> Self {
         screen_mark::theme::set_mode(config.theme_mode());
+        export::set_file_name(&config.general.file_name);
         let keymap = KeyMap::from_report(&config.key_report());
         let (jobs_tx, jobs_rx) = channel();
         let (tray_tx, tray_rx) = channel();
+        let (opened_tx, opened_rx) = channel();
         let (hotkey_tx, hotkey_rx) = channel();
         // Hotkey presses arrive on the hotkey crate's own thread on Linux;
         // forward them and wake the event loop (on Windows they also wake it
@@ -253,8 +289,13 @@ impl App {
             jobs_pending: 0,
             proxy: None,
             pinned_windows: Vec::new(),
-            immediate_capture: false,
+            startup: None,
             cli_only: false,
+            cli_grab: None,
+            exit_code: 0,
+            countdown_kind: CaptureKind::Region,
+            opened_tx,
+            opened_rx,
             startup_notified: false,
             countdown: None,
             last_region: screen_mark::last_region::load(),
@@ -262,6 +303,7 @@ impl App {
             history_window: None,
             settings_access: None,
             history_access: None,
+            overlay_access: None,
             update: Arc::default(),
             update_label: tray::UPDATE_LABEL.to_string(),
             update_check_at: None,
@@ -648,6 +690,7 @@ impl App {
             CaptureKind::Window => self.trigger_capture(event_loop, true),
             CaptureKind::Screenshot => self.do_screenshot(event_loop),
             CaptureKind::LastRegion => self.do_last_region(event_loop),
+            CaptureKind::CliGrab => self.do_cli_grab(event_loop),
         }
     }
 
@@ -687,6 +730,7 @@ impl App {
                 Some(&folder),
                 true,
                 history,
+                None,
             ))
         });
     }
@@ -766,6 +810,10 @@ impl App {
         let AppState::Capturing(ref overlay) = self.state else {
             return;
         };
+        // An image being marked up isn't anywhere on screen.
+        if overlay.canvas.is_some() {
+            return;
+        }
         let Some(rect) = overlay.selection_on_screen() else {
             return;
         };
@@ -800,6 +848,14 @@ impl App {
             rects
         });
 
+        let mut overlay = OverlayState::new(screenshot, &self.config);
+        overlay.window_pick = windows;
+        self.show_overlay(event_loop, overlay);
+    }
+
+    /// Open the overlay window over the area `overlay` covers.
+    fn show_overlay(&mut self, event_loop: &ActiveEventLoop, overlay: OverlayState) {
+        let screenshot = &overlay.screenshot;
         let (w, h) = (screenshot.width, screenshot.height);
         let attrs = WindowAttributes::default()
             .with_position(winit::dpi::PhysicalPosition::new(
@@ -824,8 +880,8 @@ impl App {
             }
         };
 
-        let mut overlay = OverlayState::new(screenshot, &self.config);
-        overlay.window_pick = windows;
+        // Made before the window is first shown (see `access::Bridge`).
+        self.overlay_access = Some(Bridge::new(event_loop, &window, self.waker()));
         self.state = AppState::Capturing(Box::new(overlay));
         self.surface = Some(surface);
         self.pixmap = Some(pixmap);
@@ -836,6 +892,166 @@ impl App {
         window.request_redraw();
         self.overlay_window = Some(window);
         self.needs_redraw = true;
+    }
+
+    /// Count down `secs` seconds on screen, then start `kind`.
+    fn start_countdown(&mut self, event_loop: &ActiveEventLoop, secs: u32, kind: CaptureKind) {
+        if self.overlay_window.is_some() || self.countdown.is_some() {
+            tracing::info!("A capture is already in progress, ignoring the countdown");
+            return;
+        }
+        tracing::info!("Capturing in {secs} seconds...");
+        self.toast = None;
+        self.countdown_kind = kind;
+        // The countdown reaching 0 schedules the capture.
+        self.countdown = Countdown::start(event_loop, secs);
+        if self.countdown.is_none() {
+            // No window to count down in: wait anyway.
+            let when = Instant::now() + Duration::from_secs(secs.into());
+            self.capture_at.push_back((when, kind));
+        }
+    }
+
+    /// `capture --clipboard` / `--save` once its countdown is over.
+    fn do_cli_grab(&mut self, _event_loop: &ActiveEventLoop) {
+        let Some((clipboard, save)) = self.cli_grab.take() else {
+            return;
+        };
+        self.exit_code = match grab_screens() {
+            Ok(screen) => cli_output(&screen, clipboard, save.as_deref()),
+            Err(e) => {
+                eprintln!("Capture failed: {e}");
+                1
+            }
+        };
+    }
+
+    /// Ask for an image file to mark up. The dialog runs on a worker
+    /// thread; the image arrives through `opened_rx`.
+    fn pick_image_to_edit(&mut self) {
+        let tx = self.opened_tx.clone();
+        let wake = self.waker();
+        std::thread::spawn(move || {
+            let picked = rfd::FileDialog::new()
+                .set_title("Mark up an image")
+                .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"])
+                .pick_file();
+            if let Some(path) = picked {
+                let opened = screen_mark::editor::open_file(&path)
+                    .map(|image| (image, screen_mark::editor::suggested_name(&path)));
+                let _ = tx.send(opened);
+                wake();
+            }
+        });
+    }
+
+    /// Read a capture from History on a worker thread, to mark up again.
+    fn edit_from_history(&mut self, path: std::path::PathBuf) {
+        let tx = self.opened_tx.clone();
+        let wake = self.waker();
+        std::thread::spawn(move || {
+            let _ = tx.send(screen_mark::history::load_editable(&path).map(|image| (image, None)));
+            wake();
+        });
+    }
+
+    /// Open the overlay on `image` to mark it up: the image in the middle
+    /// of the monitor under the mouse, selected (see `editor`).
+    fn open_editor(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        image: screen_mark::history::Editable,
+        name: Option<String>,
+    ) {
+        if self.overlay_window.is_some() || self.countdown.is_some() {
+            let spec = Spec::new(
+                Kind::Info,
+                "Finish the capture that is open first",
+                "Then mark up the image",
+            );
+            self.feedback(event_loop, spec, None);
+            return;
+        }
+        self.toast = None;
+        let monitor = pointer_monitor().or_else(|| display::monitors().first().copied());
+        let area = monitor
+            .map(|m| m.area)
+            .unwrap_or(display::Rect::new(0, 0, 1280, 800));
+        let layout =
+            screen_mark::editor::lay_out(&image, area.w, area.h, screen_mark::theme::bg_2());
+        tracing::info!(
+            "Marking up a {}x{} image with {} annotations (shown at {:.0}%)",
+            image.width,
+            image.height,
+            image.annotations.len(),
+            layout.scale * 100.0
+        );
+        let shot = capture::CapturedScreen {
+            pixels: layout.pixels,
+            width: layout.width,
+            height: layout.height,
+            x_offset: area.x,
+            y_offset: area.y,
+            scale_factor: 1.0,
+        };
+        let mut overlay = OverlayState::new(shot, &self.config);
+        overlay.canvas = Some(layout.canvas);
+        overlay.selection = Some(layout.canvas);
+        overlay.annotations = layout.annotations;
+        overlay.sync_step_counter();
+        overlay.finish_on_release = false;
+        overlay.source_name = name;
+        if layout.scale < 1.0 {
+            overlay.show_toast(
+                format!(
+                    "Shown at {:.0}% to fit the screen, and copied and saved at that size",
+                    layout.scale * 100.0
+                ),
+                5000,
+            );
+        }
+        self.show_overlay(event_loop, overlay);
+    }
+
+    /// The selection, finished: flattened pixels, their size, and what
+    /// keeps the History entry editable.
+    fn take_selection(
+        &self,
+    ) -> Option<(Vec<u8>, u32, u32, Option<screen_mark::history::Editable>)> {
+        let AppState::Capturing(ref overlay) = self.state else {
+            return None;
+        };
+        let (pixels, w, h) = overlay.flattened_selection()?;
+        Some((pixels, w, h, overlay.editable_selection()))
+    }
+
+    /// Hand the capture to the `[send] command`.
+    fn do_send(&mut self) {
+        let command = self.config.send.command.trim().to_string();
+        if command.is_empty() {
+            if let AppState::Capturing(ref mut o) = self.state {
+                o.show_toast("Set [send] command in config.toml first".into(), 4000);
+            }
+            self.needs_redraw = true;
+            return;
+        }
+        let Some((pixels, w, h, markup)) = self.take_selection() else {
+            return;
+        };
+        self.remember_region();
+        if self.config.general.history_enabled {
+            screen_mark::actions::keep_markup(
+                screen_mark::history::save_to_history(&pixels, w, h),
+                markup.as_ref(),
+            );
+        }
+        let name = screen_mark::send::name(&self.config.send);
+        self.close_overlay();
+        self.spawn_job(None, move || {
+            Some(screen_mark::send::send_capture(
+                &pixels, w, h, &command, &name,
+            ))
+        });
     }
 
     fn open_settings(&mut self, event_loop: &ActiveEventLoop, tab: Option<Tab>) {
@@ -924,6 +1140,7 @@ impl App {
             self.config = Config::load();
             self.keymap = KeyMap::from_report(&self.config.key_report());
             screen_mark::theme::set_mode(self.config.theme_mode());
+            export::set_file_name(&self.config.general.file_name);
             if !self.cli_only {
                 // Resume first (no-op if not suspended), then apply the new keys.
                 self.hotkeys.resume();
@@ -997,18 +1214,25 @@ impl App {
         match outcome {
             HistoryOutcome::Nothing => {}
             HistoryOutcome::Close => self.close_history(),
-            HistoryOutcome::Redraw | HistoryOutcome::Copy(_) => {
+            _ => {
                 if let Some(ref hw) = self.history_window {
                     hw.window.request_redraw();
                 }
             }
         }
-        if let HistoryOutcome::Copy(path) = outcome {
+        match outcome {
             // Decoded and copied off the UI thread, and reported like any
             // other copy.
-            self.spawn_job(None, move || {
+            HistoryOutcome::Copy(path) => self.spawn_job(None, move || {
                 Some(screen_mark::history_ui::copy_capture(&path))
-            });
+            }),
+            HistoryOutcome::Edit(path) => self.edit_from_history(path),
+            // The dialog waits on a worker thread, like Save in the editor.
+            HistoryOutcome::SaveAs(path) => self.spawn_job(None, move || {
+                screen_mark::history_ui::save_capture_as(&path)
+            }),
+            HistoryOutcome::Show(path) => toast::show_in_folder(&path),
+            HistoryOutcome::Nothing | HistoryOutcome::Close | HistoryOutcome::Redraw => {}
         }
     }
 
@@ -1019,6 +1243,7 @@ impl App {
     }
 
     fn close_overlay(&mut self) {
+        self.overlay_access = None;
         self.surface = None;
         self.pixmap = None;
         self.overlay_window = None;
@@ -1031,12 +1256,7 @@ impl App {
     }
 
     fn do_copy(&mut self) {
-        let copy_data = if let AppState::Capturing(ref overlay) = self.state {
-            overlay.flattened_selection()
-        } else {
-            None
-        };
-        if let Some((pixels, w, h)) = copy_data {
+        if let Some((pixels, w, h, markup)) = self.take_selection() {
             self.remember_region();
             let history = self.config.general.history_enabled;
             let save_to = self
@@ -1053,19 +1273,19 @@ impl App {
                     save_to.as_deref(),
                     true,
                     history,
+                    markup.as_ref(),
                 ))
             });
         }
     }
 
     fn do_save(&mut self) {
-        let save_data = if let AppState::Capturing(ref overlay) = self.state {
-            overlay.flattened_selection()
-        } else {
-            None
-        };
-        let Some((pixels, w, h)) = save_data else {
+        let Some((pixels, w, h, markup)) = self.take_selection() else {
             return;
+        };
+        let suggested = match &self.state {
+            AppState::Capturing(o) => o.source_name.clone(),
+            AppState::Idle => None,
         };
         self.remember_region();
         let history = self.config.general.history_enabled;
@@ -1081,17 +1301,21 @@ impl App {
                     Some(&folder),
                     false,
                     history,
+                    markup.as_ref(),
                 ))
             });
             return;
         }
         self.spawn_job(None, move || {
             let thumb = toast::make_thumb(&pixels, w, h, 192, 120);
-            match export::save_to_file(pixels, w, h, None) {
+            match export::save_to_file(pixels, w, h, None, suggested.as_deref()) {
                 Ok(Some(path)) => {
                     let path = std::path::PathBuf::from(path);
                     if history {
-                        let _ = screen_mark::history::save_to_history_from_file(&path);
+                        screen_mark::actions::keep_markup(
+                            screen_mark::history::save_to_history_from_file(&path),
+                            markup.as_ref(),
+                        );
                     }
                     Some(screen_mark::actions::describe(Some(Ok(path)), None, w, h).thumb(thumb))
                 }
@@ -1138,17 +1362,16 @@ impl App {
         }
 
         // Second click — confirmed, proceed with upload
-        let upload_data = if let AppState::Capturing(ref mut o) = self.state {
+        if let AppState::Capturing(ref mut o) = self.state {
             o.upload_confirmed = false; // reset
-            o.flattened_selection()
-        } else {
-            None
-        };
-
-        if let Some((pixels, w, h)) = upload_data {
+        }
+        if let Some((pixels, w, h, markup)) = self.take_selection() {
             self.remember_region();
             if self.config.general.history_enabled {
-                let _ = screen_mark::history::save_to_history(&pixels, w, h);
+                screen_mark::actions::keep_markup(
+                    screen_mark::history::save_to_history(&pixels, w, h),
+                    markup.as_ref(),
+                );
             }
 
             // Close overlay immediately; PNG encoding and the upload both run
@@ -1167,9 +1390,7 @@ impl App {
                 Some(
                     match screen_mark::upload::upload_to_imgur(&png_bytes, &imgur_id) {
                         Ok(url) => {
-                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                let _ = clipboard.set_text(&url);
-                            }
+                            let _ = export::copy_text(&url);
                             tracing::info!("Uploaded to Imgur: {}", url);
                             Spec::new(Kind::Success, "Uploaded; link copied", url)
                         }
@@ -1197,9 +1418,7 @@ impl App {
             self.spawn_job(None, move || {
                 Some(match screen_mark::ocr::extract_text(&cropped, w, h) {
                     Ok(text) => {
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(&text);
-                        }
+                        let _ = export::copy_text(&text);
                         let char_count = text.chars().count();
                         tracing::info!("OCR extracted {} chars", char_count);
                         let preview: String = text.chars().take(80).collect();
@@ -1220,10 +1439,14 @@ impl App {
 
     fn do_pin(&mut self, event_loop: &ActiveEventLoop) {
         self.remember_region();
+        let markup = self.take_selection().and_then(|(_, _, _, m)| m);
         if let AppState::Capturing(ref overlay) = self.state {
             if let Some((pixels, w, h)) = overlay.flattened_selection() {
                 if self.config.general.history_enabled {
-                    let _ = screen_mark::history::save_to_history(&pixels, w, h);
+                    screen_mark::actions::keep_markup(
+                        screen_mark::history::save_to_history(&pixels, w, h),
+                        markup.as_ref(),
+                    );
                 }
 
                 // Position the pin where the selection is on screen, accounting
@@ -1266,12 +1489,15 @@ impl App {
                     self.request_capture_in(event_loop, CaptureKind::LastRegion, menu_gone)
                 }
                 Item::Window => self.request_capture_in(event_loop, CaptureKind::Window, menu_gone),
-                Item::Delay(secs) => {
-                    tracing::info!("Capturing in {secs} seconds...");
-                    self.toast = None;
-                    // The countdown reaching 0 schedules the capture.
-                    self.countdown = Countdown::start(event_loop, secs);
-                }
+                Item::Delay(secs) => self.start_countdown(event_loop, secs, CaptureKind::Region),
+                Item::EditFile => self.pick_image_to_edit(),
+                Item::EditClipboard => match screen_mark::editor::from_clipboard() {
+                    Ok(image) => self.open_editor(event_loop, image, None),
+                    Err(e) => {
+                        let spec = Spec::new(Kind::Info, "Nothing to mark up", e);
+                        self.feedback(event_loop, spec, None);
+                    }
+                },
                 Item::OpenFolder => {
                     let folder = self.config.save_folder();
                     if let Err(e) = std::fs::create_dir_all(&folder) {
@@ -1392,6 +1618,12 @@ impl App {
         }
 
         self.needs_redraw = false;
+        if let (Some(access), AppState::Capturing(overlay)) =
+            (self.overlay_access.as_mut(), &self.state)
+        {
+            // The overlay's pixels are the window's: no scaling.
+            access.update(overlay.snapshot(), 1.0);
+        }
     }
 
     /// Carry out what the overlay asked for after an input (see
@@ -1406,6 +1638,7 @@ impl App {
             OverlayOutcome::Pin => self.do_pin(event_loop),
             OverlayOutcome::Ocr => self.do_ocr(),
             OverlayOutcome::Upload => self.do_upload(),
+            OverlayOutcome::Send => self.do_send(),
             OverlayOutcome::PickColor(preset) => self.pick_color(preset),
             OverlayOutcome::MovePointer(to) => {
                 // An arrow key moved the pointer by a pixel. Tell the
@@ -1573,9 +1806,16 @@ impl ApplicationHandler for App {
             }
         }
 
-        if self.immediate_capture {
-            self.immediate_capture = false;
-            self.trigger_capture(event_loop, false);
+        match self.startup.take() {
+            None => {}
+            Some(Startup::Overlay(0)) => self.trigger_capture(event_loop, false),
+            Some(Startup::Overlay(secs)) => {
+                self.start_countdown(event_loop, secs, CaptureKind::Region)
+            }
+            Some(Startup::Grab(secs)) => {
+                self.start_countdown(event_loop, secs, CaptureKind::CliGrab)
+            }
+            Some(Startup::Edit(image, name)) => self.open_editor(event_loop, *image, name),
         }
     }
 
@@ -1929,6 +2169,28 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.process_tray_events(event_loop);
 
+        // What a screen reader asked the overlay to do.
+        let asked = self
+            .overlay_access
+            .as_mut()
+            .map(|access| access.requests())
+            .unwrap_or_default();
+        for request in asked {
+            let AppState::Capturing(overlay) = &mut self.state else {
+                break;
+            };
+            let outcome = overlay.request(request);
+            self.apply_outcome(event_loop, outcome);
+        }
+
+        // An image read on a worker thread, to mark up.
+        while let Ok(opened) = self.opened_rx.try_recv() {
+            match opened {
+                Ok((image, name)) => self.open_editor(event_loop, image, name),
+                Err(e) => self.report_failure(event_loop, "Couldn't open the image", e),
+            }
+        }
+
         // What a screen reader asked Settings or History to do.
         let asked = self
             .settings_access
@@ -2055,7 +2317,7 @@ impl ApplicationHandler for App {
                 cd.hide();
                 self.countdown = None;
                 self.capture_at
-                    .push_back((now + Duration::from_millis(300), CaptureKind::Region));
+                    .push_back((now + Duration::from_millis(300), self.countdown_kind));
             } else {
                 wake_at(cd.next_tick());
             }
@@ -2108,7 +2370,8 @@ impl ApplicationHandler for App {
         // `screen-mark capture` (interactive): quit once the overlay is gone
         // and its copy/save has finished and been reported.
         if self.cli_only
-            && !self.immediate_capture
+            && self.startup.is_none()
+            && self.countdown.is_none()
             && self.overlay_window.is_none()
             && self.jobs_pending == 0
             && self.toast.is_none()
@@ -2185,6 +2448,18 @@ fn only_instance(wait: bool) -> bool {
     }
 }
 
+/// The event loop. On a Wayland session screen-mark's windows run under
+/// XWayland when it is there: Wayland lets no window place itself or stay
+/// on top, and the overlay has to cover the screen it shows.
+fn new_event_loop() -> Result<EventLoop<()>, winit::error::EventLoopError> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        return EventLoop::builder().with_x11().build();
+    }
+    EventLoop::new()
+}
+
 fn run_tray_app(config: Config, updated_from: Option<String>) {
     // The tray app has no console: a panic shows a dialog naming the log.
     screen_mark::logging::show_dialog_on_panic(true);
@@ -2202,7 +2477,7 @@ fn run_tray_app(config: Config, updated_from: Option<String>) {
         update::remove_leftovers(&exe);
     }
 
-    let event_loop = match EventLoop::new() {
+    let event_loop = match new_event_loop() {
         Ok(el) => el,
         Err(e) => {
             screen_mark::installer::show_error(&format!("Failed to start: {e}"));
@@ -2219,64 +2494,42 @@ fn run_tray_app(config: Config, updated_from: Option<String>) {
     }
 }
 
-fn run_tray_app_with_immediate_capture(config: Config) {
+/// A command-line run that needs windows (the overlay, a countdown): an
+/// event loop with no tray and no hotkeys, that ends when its job is done.
+/// Returns the exit code.
+fn run_cli_app(config: Config, startup: Startup, grab: Option<(bool, Option<String>)>) -> i32 {
     // Nobody reads stderr while the overlay is up; show a dialog instead.
     screen_mark::logging::show_dialog_on_panic(true);
-    let event_loop = match EventLoop::new() {
+    let event_loop = match new_event_loop() {
         Ok(el) => el,
         Err(e) => {
             screen_mark::installer::show_error(&format!("Failed to start: {e}"));
-            std::process::exit(1);
+            return 1;
         }
     };
     let mut app = App::new(config);
     app.set_proxy(event_loop.create_proxy());
-    app.immediate_capture = true;
+    app.startup = Some(startup);
+    app.cli_grab = grab;
     app.cli_only = true;
     if let Err(e) = event_loop.run_app(&mut app) {
         screen_mark::installer::show_error(&format!("Event loop error: {e}"));
-        std::process::exit(1);
+        return 1;
     }
+    app.exit_code
 }
 
-fn run_cli_capture(clipboard: bool, save: Option<String>, delay: u64) {
-    if delay > 0 {
-        tracing::info!("Waiting {} seconds...", delay);
-        std::thread::sleep(std::time::Duration::from_secs(delay));
-    }
+/// Grab the whole virtual desktop as one image.
+fn grab_screens() -> Result<capture::CapturedScreen, String> {
+    capture::create_capturer()
+        .map_err(|e| e.to_string())
+        .and_then(|c| c.capture_all_screens().map_err(|e| e.to_string()))
+        .and_then(|s| s.into_iter().next().ok_or_else(|| "no screen".to_string()))
+}
 
-    // If neither --clipboard nor --save: open interactive overlay
-    if !clipboard && save.is_none() {
-        tracing::info!("Opening interactive capture...");
-        let config = Config::load();
-        run_tray_app_with_immediate_capture(config);
-        return;
-    }
-
-    // Non-interactive: capture full screen directly
-    let capturer = match capture::create_capturer() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to create capturer: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let screens = match capturer.capture_all_screens() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Capture failed: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    if screens.is_empty() {
-        eprintln!("No screens captured");
-        std::process::exit(1);
-    }
-
-    let screen = &screens[0];
-
+/// What `capture --clipboard` / `--save` does with a capture. Returns the
+/// exit code.
+fn cli_output(screen: &capture::CapturedScreen, clipboard: bool, save: Option<&str>) -> i32 {
     // --clipboard and --save are independent; both can be given at once.
     if clipboard {
         match export::copy_to_clipboard(&screen.pixels, screen.width, screen.height) {
@@ -2288,13 +2541,13 @@ fn run_cli_capture(clipboard: bool, save: Option<String>, delay: u64) {
             }
             Err(e) => {
                 eprintln!("Clipboard error: {}", e);
-                std::process::exit(1);
+                return 1;
             }
         }
     }
     if let Some(path) = save {
         let written = export::write_image(
-            std::path::Path::new(&path),
+            std::path::Path::new(path),
             screen.pixels.clone(),
             screen.width,
             screen.height,
@@ -2303,10 +2556,81 @@ fn run_cli_capture(clipboard: bool, save: Option<String>, delay: u64) {
             Ok(()) => println!("Saved to {}", path),
             Err(e) => {
                 eprintln!("Save error: {}", e);
-                std::process::exit(1);
+                return 1;
             }
         }
     }
+    0
+}
+
+fn run_cli_capture(clipboard: bool, save: Option<String>, delay: u64) {
+    let delay = u32::try_from(delay).unwrap_or(u32::MAX);
+    let config = Config::load();
+    export::set_file_name(&config.general.file_name);
+    if delay > 0 {
+        // The countdown is on screen too: the terminal may well be behind
+        // what is being captured.
+        println!("Capturing in {delay} seconds...");
+    }
+    // Neither --clipboard nor --save: the interactive overlay.
+    if !clipboard && save.is_none() {
+        tracing::info!("Opening interactive capture...");
+        let code = run_cli_app(config, Startup::Overlay(delay), None);
+        std::process::exit(code);
+    }
+    if delay > 0 {
+        let code = run_cli_app(config, Startup::Grab(delay), Some((clipboard, save)));
+        std::process::exit(code);
+    }
+
+    // Non-interactive: capture full screen directly
+    let screen = match grab_screens() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Capture failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let code = cli_output(&screen, clipboard, save.as_deref());
+    if code != 0 {
+        std::process::exit(code);
+    }
+}
+
+/// `screen-mark edit [FILE]`: mark up an image file, or the image on the
+/// clipboard.
+fn run_cli_edit(file: Option<std::path::PathBuf>) {
+    let opened = match &file {
+        Some(path) => screen_mark::editor::open_file(path)
+            .map(|image| (image, screen_mark::editor::suggested_name(path))),
+        None => screen_mark::editor::from_clipboard().map(|image| (image, None)),
+    };
+    let (image, name) = match opened {
+        Ok(opened) => opened,
+        Err(e) => {
+            eprintln!("{e}");
+            // Started from Explorer ("Open with"), not a terminal: nobody
+            // would see the message otherwise.
+            if !has_console() {
+                screen_mark::installer::show_error(&e);
+            }
+            std::process::exit(1);
+        }
+    };
+    let config = Config::load();
+    export::set_file_name(&config.general.file_name);
+    let code = run_cli_app(config, Startup::Edit(Box::new(image), name), None);
+    std::process::exit(code);
+}
+
+/// Set when this process is attached to a terminal; on Windows only once
+/// `AttachConsole` has worked (see `main`).
+static HAS_CONSOLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(!cfg!(target_os = "windows"));
+
+/// Whether this process writes to a terminal (it was started from one).
+fn has_console() -> bool {
+    HAS_CONSOLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// `screen-mark update`: look for a newer release and, unless `check_only`,
@@ -2393,9 +2717,8 @@ fn main() {
     #[cfg(target_os = "windows")]
     if cli.command.is_some() {
         use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
-        unsafe {
-            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
-        }
+        let attached = unsafe { AttachConsole(ATTACH_PARENT_PROCESS) }.is_ok();
+        HAS_CONSOLE.store(attached, std::sync::atomic::Ordering::Relaxed);
     }
 
     match cli.command {
@@ -2435,6 +2758,7 @@ fn main() {
         }) => {
             run_cli_capture(clipboard, save, delay);
         }
+        Some(Commands::Edit { file }) => run_cli_edit(file),
         Some(Commands::Install) => {
             if let Err(e) = screen_mark::installer::install() {
                 screen_mark::installer::show_error(&format!("Install failed: {e}"));

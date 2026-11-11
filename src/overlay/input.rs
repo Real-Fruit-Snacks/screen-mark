@@ -19,6 +19,7 @@ use crate::tools::{
     measure_text_width, move_annotation, recolor_annotation, record_undo, resize_annotation,
     text_line_height, Annotation, AnnotationTool, ResizeHandle, ToolKind, UndoAction, TOOL_ORDER,
 };
+use crate::tools::{annotation_fillable, annotation_style, restyle_annotation, styled_tool};
 
 /// How close, in pixels, a click has to be to a selection edge, a resize
 /// handle or an annotation to grab it.
@@ -38,6 +39,8 @@ pub enum Outcome {
     Pin,
     Ocr,
     Upload,
+    /// Run the `[send] command` on the capture.
+    Send,
     /// Open the colour picker, starting from this preset (a right-click on
     /// its swatch), then call `apply_picked_color`.
     PickColor(usize),
@@ -127,6 +130,12 @@ impl OverlayState {
 
     /// A key went down.
     pub fn on_key(&mut self, input: &KeyInput, keymap: &KeyMap) -> Outcome {
+        let outcome = self.key_down(input, keymap);
+        self.keep_on_canvas();
+        outcome
+    }
+
+    fn key_down(&mut self, input: &KeyInput, keymap: &KeyMap) -> Outcome {
         self.mods = input.mods;
         // Typing a text annotation takes every key.
         if self.text_input_active {
@@ -149,6 +158,7 @@ impl OverlayState {
                 KeyId::Pin => Outcome::Pin,
                 KeyId::Ocr => Outcome::Ocr,
                 KeyId::Upload => Outcome::Upload,
+                KeyId::Send => Outcome::Send,
                 KeyId::Undo | KeyId::Redo => {
                     let changed = if action == KeyId::Undo {
                         apply_undo(
@@ -182,6 +192,14 @@ impl OverlayState {
                 }
                 _ => Outcome::Nothing,
             };
+        }
+
+        if input.key.is_some_and(|k| keymap.style(input.mods, k))
+            || input
+                .typed_char()
+                .is_some_and(|c| keymap.style(input.mods, Key::Typed(c)))
+        {
+            return self.cycle_style();
         }
 
         let tool = input
@@ -525,6 +543,12 @@ impl OverlayState {
 
     /// The pointer moved to `pos` (overlay pixels).
     pub fn on_cursor_moved(&mut self, pos: Point) -> Outcome {
+        let outcome = self.cursor_moved(pos);
+        self.keep_on_canvas();
+        outcome
+    }
+
+    fn cursor_moved(&mut self, pos: Point) -> Outcome {
         let prev = self.last_mouse_pos;
         self.last_mouse_pos = pos;
         let dx = pos.x - prev.x;
@@ -621,6 +645,12 @@ impl OverlayState {
 
     /// The left button went down at the last pointer position.
     pub fn on_mouse_down(&mut self) -> Outcome {
+        let outcome = self.mouse_down();
+        self.keep_on_canvas();
+        outcome
+    }
+
+    fn mouse_down(&mut self) -> Outcome {
         // Window capture: the click confirms the highlighted window.
         if self.window_pick.take().is_some() {
             tracing::info!("Window captured");
@@ -654,33 +684,7 @@ impl OverlayState {
 
         // 1. The toolbar (only there once a selection exists).
         if let Some(button) = self.toolbar_hit(pos) {
-            let action = BUTTONS.get(button).map(|d| d.action);
-            // Upload asks for a second click; anything else withdraws it.
-            if action != Some(ButtonAction::Upload) {
-                self.upload_confirmed = false;
-            }
-            return match action {
-                Some(ButtonAction::Tool(kind)) => {
-                    self.active_tool = kind;
-                    if kind != ToolKind::Select {
-                        self.selected_index = None;
-                    }
-                    Outcome::Redraw
-                }
-                Some(ButtonAction::Color(i)) => match Color::presets().get(i) {
-                    Some(color) => {
-                        self.pick_color(*color, false);
-                        Outcome::Redraw
-                    }
-                    None => Outcome::Nothing,
-                },
-                Some(ButtonAction::Ocr) => Outcome::Ocr,
-                Some(ButtonAction::Upload) => Outcome::Upload,
-                Some(ButtonAction::Pin) => Outcome::Pin,
-                Some(ButtonAction::Copy) => Outcome::Copy,
-                Some(ButtonAction::Save) => Outcome::Save,
-                None => Outcome::Nothing,
-            };
+            return self.press_button(button);
         }
 
         // 2. No selection yet: start one.
@@ -707,6 +711,40 @@ impl OverlayState {
                 self.drag_start = Some(pos);
                 Outcome::Redraw
             }
+        }
+    }
+
+    /// What toolbar button `button` (an index into `BUTTONS`) does when
+    /// it is clicked, or pressed by a screen reader.
+    pub fn press_button(&mut self, button: usize) -> Outcome {
+        let action = BUTTONS.get(button).map(|d| d.action);
+        // Upload asks for a second click; anything else withdraws it.
+        if action != Some(ButtonAction::Upload) {
+            self.upload_confirmed = false;
+        }
+        match action {
+            Some(ButtonAction::Tool(kind)) => {
+                self.active_tool = kind;
+                if kind != ToolKind::Select {
+                    self.selected_index = None;
+                }
+                Outcome::Redraw
+            }
+            Some(ButtonAction::Color(i)) => match Color::presets().get(i) {
+                Some(color) => {
+                    self.pick_color(*color, false);
+                    Outcome::Redraw
+                }
+                None => Outcome::Nothing,
+            },
+            Some(ButtonAction::Style) => self.cycle_style(),
+            Some(ButtonAction::Ocr) => Outcome::Ocr,
+            Some(ButtonAction::Upload) => Outcome::Upload,
+            Some(ButtonAction::Send) => Outcome::Send,
+            Some(ButtonAction::Pin) => Outcome::Pin,
+            Some(ButtonAction::Copy) => Outcome::Copy,
+            Some(ButtonAction::Save) => Outcome::Save,
+            None => Outcome::Nothing,
         }
     }
 
@@ -790,6 +828,12 @@ impl OverlayState {
 
     /// The left button came up at the last pointer position.
     pub fn on_mouse_up(&mut self) -> Outcome {
+        let outcome = self.mouse_up();
+        self.keep_on_canvas();
+        outcome
+    }
+
+    fn mouse_up(&mut self) -> Outcome {
         let pos = self.last_mouse_pos;
 
         if self.is_selecting {
@@ -839,7 +883,8 @@ impl OverlayState {
             }
         };
         match annotation {
-            Some(annotation) => {
+            Some(mut annotation) => {
+                restyle_annotation(&mut annotation, self.shape_style);
                 self.annotations.push(annotation);
                 record_undo(
                     &mut self.undo_stack,
@@ -893,6 +938,38 @@ impl OverlayState {
     /// A colour was chosen. With an annotation selected it is recoloured
     /// (one undo step); a swatch click then leaves the drawing colour alone,
     /// while the picker (`also_set`) changes both.
+    /// Switch to the next shape style (outline, dashed, filled). With a
+    /// shape selected, it is that shape that changes, as one undo step;
+    /// otherwise it is the style new shapes are drawn with.
+    pub fn cycle_style(&mut self) -> Outcome {
+        let selected = self
+            .selected_index
+            .filter(|i| *i < self.annotations.len())
+            .filter(|i| annotation_style(&self.annotations[*i]).is_some());
+        if let Some(idx) = selected {
+            let before = self.annotations[idx].clone();
+            let current = annotation_style(&before).unwrap_or_default();
+            let next = current.next(annotation_fillable(&before));
+            restyle_annotation(&mut self.annotations[idx], next);
+            record_undo(
+                &mut self.undo_stack,
+                &mut self.redo_stack,
+                UndoAction::Modify(idx, before),
+            );
+            self.show_toast(format!("Style: {}", next.label().to_lowercase()), 1200);
+            return Outcome::Redraw;
+        }
+        // Lines and arrows have no filled style; with one of those tools
+        // the cycle skips it.
+        let fillable = styled_tool(self.active_tool).unwrap_or(true);
+        self.shape_style = self.shape_style.next(fillable);
+        self.show_toast(
+            format!("Style: {}", self.shape_style.label().to_lowercase()),
+            1200,
+        );
+        Outcome::Redraw
+    }
+
     fn pick_color(&mut self, color: Color, also_set: bool) {
         let selected = self.selected_index.filter(|i| *i < self.annotations.len());
         if also_set || self.selected_index.is_none() {

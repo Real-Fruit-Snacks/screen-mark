@@ -88,3 +88,9 @@ accesskit_winit = { version = "0.34", default-features = false, features = ["rwh
 x11rb = { version = "0.13", features = ["randr"] }
 # Same version tray-icon/muda already pull in; used to run the tray's GTK loop.
 gtk = "0.18"
+# Wayland capture through the desktop's screenshot portal (src/capture/
+# wayland.rs). All three are already in the tree through rfd's file dialogs,
+# with these features; they add no packages.
+ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
+pollster = "0.4"
+url = "2"

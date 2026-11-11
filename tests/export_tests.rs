@@ -43,6 +43,7 @@ fn flatten_with_rectangle_modifies_pixels() {
     }
 
     let annotations = vec![Annotation::Rectangle {
+        style: Default::default(),
         top_left: Point::new(10.0, 10.0),
         size: Size::new(40.0, 40.0),
         color: Color::red(),
@@ -166,6 +167,7 @@ fn crop_and_flatten_offsets_annotations() {
 
     // Annotation at absolute coordinates
     let annotations = vec![Annotation::Rectangle {
+        style: Default::default(),
         top_left: Point::new(30.0, 30.0),
         size: Size::new(20.0, 20.0),
         color: Color::red(),

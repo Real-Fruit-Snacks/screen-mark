@@ -265,7 +265,7 @@ fn describes_every_save_and_copy_outcome() {
 fn finish_capture_saves_and_attaches_a_thumbnail() {
     let dir = temp_dir("finish");
     let shot = desktop(0, 0, 640, 360);
-    let spec = finish_capture(&shot.pixels, 640, 360, Some(&dir), false, false);
+    let spec = finish_capture(&shot.pixels, 640, 360, Some(&dir), false, false, None);
     assert_eq!(spec.title, "Saved");
     let Click::ShowFile(path) = spec.click.clone() else {
         panic!("expected a file to show: {spec:?}");
@@ -289,7 +289,7 @@ fn finish_capture_reports_an_unwritable_folder() {
     let file = dir.join("file");
     std::fs::write(&file, b"x").unwrap();
     let shot = desktop(0, 0, 8, 8);
-    let spec = finish_capture(&shot.pixels, 8, 8, Some(&file), false, false);
+    let spec = finish_capture(&shot.pixels, 8, 8, Some(&file), false, false, None);
     assert_eq!(
         (spec.kind, spec.title.as_str()),
         (Kind::Error, "Couldn't save")

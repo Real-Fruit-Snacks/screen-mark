@@ -40,6 +40,7 @@ impl RectangleTool {
             return None; // too small — likely a click, not a drag
         }
         Some(Annotation::Rectangle {
+            style: super::ShapeStyle::Outline,
             top_left: Point::new(min_x, min_y),
             size: Size::new(w, h),
             color: self.color,

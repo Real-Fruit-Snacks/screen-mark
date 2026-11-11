@@ -50,8 +50,11 @@ pub fn create_capturer() -> Result<Box<dyn ScreenCapture>, CaptureError> {
 
     #[cfg(target_os = "linux")]
     {
-        // X11 (or XWayland). Native Wayland capture via xdg-desktop-portal
-        // screencopy is not implemented yet — see capture/wayland.rs.
+        // On a Wayland session no program can read the screen itself; the
+        // desktop's screenshot portal takes the picture (capture/wayland.rs).
+        if wayland::wanted() {
+            return Ok(Box::new(wayland::PortalCapturer::new()));
+        }
         Ok(Box::new(x11::X11Capturer::new()?))
     }
 

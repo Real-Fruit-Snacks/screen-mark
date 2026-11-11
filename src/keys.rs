@@ -779,6 +779,10 @@ pub enum KeyId {
     Pin,
     Ocr,
     Upload,
+    /// Run the `[send] command` on the capture.
+    Send,
+    /// Switch the shape style (outline, dashed, filled).
+    Style,
     /// Index into `ShortcutsConfig::entries()` and `tools::TOOL_ORDER`.
     Tool(usize),
 }
@@ -787,7 +791,8 @@ impl KeyId {
     pub fn scope(self) -> Scope {
         match self {
             KeyId::Region | KeyId::Screenshot | KeyId::LastRegion => Scope::Global,
-            KeyId::Tool(_) => Scope::Tool,
+            // One bare key, like a tool: it switches how shapes are drawn.
+            KeyId::Tool(_) | KeyId::Style => Scope::Tool,
             _ => Scope::Editor,
         }
     }
@@ -805,6 +810,8 @@ impl KeyId {
             KeyId::Pin => "Pin to screen",
             KeyId::Ocr => "Copy text (OCR)",
             KeyId::Upload => "Upload to Imgur",
+            KeyId::Send => "Send (your command)",
+            KeyId::Style => "Shape style",
             KeyId::Tool(i) => TOOL_LABELS.get(i).copied().unwrap_or("Tool"),
         }
     }
@@ -820,7 +827,8 @@ impl KeyId {
             KeyId::Undo => "Ctrl+Z",
             KeyId::Redo => "Ctrl+Shift+Z",
             KeyId::SelectAll => "Ctrl+A",
-            KeyId::Pin | KeyId::Ocr | KeyId::Upload => "",
+            KeyId::Style => "D",
+            KeyId::Pin | KeyId::Ocr | KeyId::Upload | KeyId::Send => "",
             KeyId::Tool(i) => TOOL_DEFAULTS.get(i).copied().unwrap_or(""),
         }
     }
@@ -840,8 +848,10 @@ impl KeyId {
             KeyId::Pin,
             KeyId::Ocr,
             KeyId::Upload,
+            KeyId::Send,
         ]);
         v.extend((0..TOOL_LABELS.len()).map(KeyId::Tool));
+        v.push(KeyId::Style);
         v
     }
 }
@@ -967,6 +977,7 @@ pub fn check(get: impl Fn(KeyId) -> String) -> Report {
 pub struct KeyMap {
     editor: Vec<(KeyId, Binding)>,
     tools: Vec<(usize, Binding)>,
+    style: Option<Binding>,
 }
 
 impl KeyMap {
@@ -975,11 +986,11 @@ impl KeyMap {
         for (id, b) in &report.bound {
             match id.scope() {
                 Scope::Editor => map.editor.push((*id, *b)),
-                Scope::Tool => {
-                    if let KeyId::Tool(i) = id {
-                        map.tools.push((*i, *b));
-                    }
-                }
+                Scope::Tool => match id {
+                    KeyId::Tool(i) => map.tools.push((*i, *b)),
+                    KeyId::Style => map.style = map.style.or(Some(*b)),
+                    _ => {}
+                },
                 Scope::Global => {}
             }
         }
@@ -992,6 +1003,12 @@ impl KeyMap {
             .iter()
             .find(|(_, b)| b.matches(mods, key, Scope::Editor))
             .map(|(id, _)| *id)
+    }
+
+    /// Whether this press switches the shape style.
+    pub fn style(&self, mods: Mods, key: Key) -> bool {
+        self.style
+            .is_some_and(|b| b.matches(mods, key, Scope::Tool))
     }
 
     /// The tool index bound to this press, if any.

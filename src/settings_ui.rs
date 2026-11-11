@@ -1097,28 +1097,26 @@ impl SettingsView {
         }
         y += 40.0;
 
+        // Set up in config.toml only: say whether they are.
         let imgur = if self.config.general.imgur_client_id.is_empty() {
-            "Imgur upload: not set up (imgur_client_id in config.toml)"
+            "Imgur upload: not set up"
         } else {
-            "Imgur upload: set up (client ID in config.toml)"
+            "Imgur upload: set up"
         };
-        label(p, LEFT, y, imgur, 12.0, crate::theme::text_soft());
+        let send = match crate::send::split(&self.config.send.command) {
+            Ok(words) => format!("Send runs {}", words[0]),
+            Err(_) => "Send: not set up".to_string(),
+        };
+        let line = format!("{imgur} · {send} (config.toml)");
+        let fitted = crate::toast::fit_middle(&line, 12.0, WIN_W as f32 - LEFT * 2.0);
+        label(p, LEFT, y, &fitted, 12.0, crate::theme::text_soft());
     }
 
     fn render_capture(&mut self, p: &mut Pixmap) {
         let mut y = CONTENT_TOP;
         let shot = display_binding(&self.config.hotkey.screenshot);
-        section(p, y, &format!("Screenshot hotkey ({shot})"));
-        y += 20.0;
-        label(
-            p,
-            LEFT,
-            y,
-            "One press saves a PNG and copies it.",
-            12.0,
-            crate::theme::text_soft(),
-        );
-        y += 24.0;
+        section(p, y, &format!("Screenshot hotkey ({shot}): save and copy"));
+        y += 22.0;
         let all = self.config.screenshot_all_monitors();
         self.segmented(
             p,
@@ -1213,7 +1211,29 @@ impl SettingsView {
                 Action::DefaultDir,
             );
         }
-        y += 40.0;
+        y += 32.0;
+        // What a capture saved now would be called (`file_name`).
+        let name = crate::export::file_stem(
+            &self.config.general.file_name,
+            chrono::Local::now(),
+            1920,
+            1080,
+        );
+        label(p, LEFT, y + 2.0, "Names", 12.0, crate::theme::text_muted());
+        let shown = crate::toast::fit_middle(
+            &format!("{name}.png (config.toml)"),
+            12.0,
+            WIN_W as f32 - (LEFT + 52.0) - LEFT,
+        );
+        label(
+            p,
+            LEFT + 52.0,
+            y + 2.0,
+            &shown,
+            12.0,
+            crate::theme::text_soft(),
+        );
+        y += 30.0;
 
         section(p, y, "After a capture");
         y += 24.0;

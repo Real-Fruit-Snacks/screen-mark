@@ -4,6 +4,7 @@ use screen_mark::tools::{annotation_bounding_box, resize_annotation, Annotation,
 #[test]
 fn resize_rectangle_bottom_right_outward() {
     let mut ann = Annotation::Rectangle {
+        style: Default::default(),
         top_left: Point::new(20.0, 20.0),
         size: Size::new(80.0, 60.0),
         color: Color::red(),
@@ -29,6 +30,7 @@ fn resize_rectangle_bottom_right_outward() {
 #[test]
 fn resize_rectangle_top_left_inward() {
     let mut ann = Annotation::Rectangle {
+        style: Default::default(),
         top_left: Point::new(20.0, 20.0),
         size: Size::new(80.0, 60.0),
         color: Color::red(),
@@ -50,6 +52,7 @@ fn resize_rectangle_top_left_inward() {
 #[test]
 fn resize_arrow_scales_endpoints() {
     let mut ann = Annotation::Arrow {
+        style: Default::default(),
         start: Point::new(10.0, 10.0),
         end: Point::new(110.0, 60.0),
         color: Color::red(),
@@ -70,6 +73,7 @@ fn resize_arrow_scales_endpoints() {
 #[test]
 fn resize_ellipse_changes_radii() {
     let mut ann = Annotation::Ellipse {
+        style: Default::default(),
         center: Point::new(100.0, 100.0),
         radius_x: 40.0,
         radius_y: 30.0,
@@ -107,6 +111,7 @@ fn resize_ellipse_changes_radii() {
 #[test]
 fn resize_minimum_size_rejected() {
     let mut ann = Annotation::Rectangle {
+        style: Default::default(),
         top_left: Point::new(20.0, 20.0),
         size: Size::new(80.0, 60.0),
         color: Color::red(),
@@ -123,6 +128,7 @@ fn resize_minimum_size_rejected() {
 #[test]
 fn resize_rounded_rect() {
     let mut ann = Annotation::RoundedRect {
+        style: Default::default(),
         top_left: Point::new(10.0, 10.0),
         size: Size::new(60.0, 40.0),
         color: Color::red(),

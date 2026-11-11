@@ -2,6 +2,28 @@
 
 All notable changes to screen-mark will be documented in this file.
 
+## [Unreleased]
+
+Images that are already there can be marked up, History can bring a capture back with its annotations still editable, shapes can be dashed or filled, and capture works on Wayland.
+
+### Added
+- **Mark up an image you already have.** *Mark up an image...* and *Mark up the clipboard image* in the tray menu, and `screen-mark edit [FILE]` from a terminal (no file: the clipboard's image), open it in the same editor: the image in the middle of the screen, selected, with every tool and action. Shrinking the selection crops. Save suggests `<name> (marked up).png`. An image bigger than the screen is scaled to fit, and is copied and saved at that size.
+- **History does more than copy.** Buttons along the bottom act on the capture clicked last: *Copy*, *Mark up*, *Save as...*, *Show in folder* and *Delete* (one capture; *Clear All* is still there). From the keyboard: `E`, `S`, `O` and `Delete` on the focused capture, and `Tab` reaches the buttons.
+- **Annotations stay editable in History.** A capture with annotations keeps the clean image and the annotations beside its PNG (`<time>.markup`), so *Mark up* brings back the arrows, boxes and text to move, restyle or fix instead of a flat picture. Captures without annotations, and those from earlier versions, open as pictures. Deleting or pruning a capture removes its markup.
+- **Dashed and filled shapes.** Rectangles, circles, rounded rectangles, lines and arrows are drawn as an outline, dashed, or filled (lines and arrows: outline or dashed). `D` or the style button beside the colours switches; with a shape selected it restyles that shape, as one undo step. A filled shape can be picked up anywhere on it. `[general] shape_style` sets where each capture starts; `[keys] style` rebinds `D`.
+- **Send: hand a capture to your own command.** `[send] command` (with `{file}` for the capture's PNG, or the path last) adds a Send button to the toolbar and a bindable key (`[keys] send`). What the command prints is copied, so an upload script that prints a link leaves the link on the clipboard. No shell runs it; a failure shows the exit code and the last line it printed; it is stopped after two minutes. `[send] name` renames the button.
+- **File name patterns.** `[general] file_name` sets what captures are saved as: `{date}`, `{time}`, `{year}` ... `{second}`, `{width}`, `{height}`. The default is the name screen-mark always used. Characters a file name can't hold become `-`. Settings › Capture shows the next name.
+- **Wayland capture.** On a Wayland session screen-mark takes the picture through the desktop's screenshot portal (xdg-desktop-portal with the GNOME, KDE or wlr backend) and runs its windows through XWayland. Wayland has no global hotkeys: bind a desktop shortcut to `screen-mark capture`. `SCREEN_MARK_CAPTURE=x11` or `portal` overrides the choice. No new packages: `ashpd`, `pollster` and `url` were already in the tree through the file dialogs.
+- **The capture overlay talks to screen readers (Windows).** Its toolbar's buttons, which tool, colour and shape style are on, and a status line: the selection's size, the tool, how many annotations, and the keys that finish or cancel. A screen reader can press any toolbar button.
+
+### Changed
+- `screen-mark capture --delay N` counts down on screen, like the tray menu's delays, and prints that it is waiting. With `--clipboard` or `--save` it used to wait without a word, and the countdown could not have been in the picture: it is gone before the capture.
+- Settings › General says whether Imgur upload and Send are set up, in one line; Settings › Capture shows the file name pattern's next name.
+- The toolbar has two more buttons (Style always, Send when a command is set).
+
+### Fixed
+- **Linux: links from Imgur upload and text from OCR left the clipboard at once.** They were copied through a clipboard handle that was dropped straight away, and on X11 the clipboard lives only as long as its owner. They now go through the same long-lived handle as images.
+
 ## [2.3.0] - 2026-11-11
 
 screen-mark can now update itself, there is a Redact tool, Settings and History work from the keyboard and with a screen reader, and the overlay redraws only what changed. 2.2.1 has no updater, so install this release by hand; later ones can be installed from the tray menu or with `screen-mark update`.

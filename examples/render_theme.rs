@@ -62,12 +62,14 @@ fn render(mode: ThemeMode, out: &str) {
             size: Size::new(180.0, 90.0),
             color: presets[0],
             thickness: 3.0,
+            style: Default::default(),
         },
         Annotation::Arrow {
             start: Point::new(700.0, 180.0),
             end: Point::new(860.0, 260.0),
             color: presets[1],
             thickness: 3.0,
+            style: Default::default(),
         },
         Annotation::Text {
             position: Point::new(490.0, 300.0),
@@ -87,6 +89,7 @@ fn render(mode: ThemeMode, out: &str) {
             radius_y: 40.0,
             color: presets[4],
             thickness: 3.0,
+            style: Default::default(),
         },
     ];
     let mut pixmap = tiny_skia::Pixmap::new(W, H).unwrap();

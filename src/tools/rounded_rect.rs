@@ -50,6 +50,7 @@ impl RoundedRectTool {
             return None;
         }
         Some(Annotation::RoundedRect {
+            style: super::ShapeStyle::Outline,
             top_left: Point::new(min_x, min_y),
             size: Size::new(w, h),
             color: self.color,

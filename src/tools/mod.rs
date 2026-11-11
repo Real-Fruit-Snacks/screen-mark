@@ -109,19 +109,24 @@ fn cap_undo_stack(stack: &mut Vec<UndoAction>) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Annotation {
     Arrow {
         start: Point,
         end: Point,
         color: Color,
         thickness: f32,
+        #[serde(default)]
+        style: ShapeStyle,
     },
     Rectangle {
         top_left: Point,
         size: Size,
         color: Color,
         thickness: f32,
+        #[serde(default)]
+        style: ShapeStyle,
     },
     Pencil {
         points: Vec<Point>,
@@ -145,12 +150,16 @@ pub enum Annotation {
         radius_y: f32,
         color: Color,
         thickness: f32,
+        #[serde(default)]
+        style: ShapeStyle,
     },
     Line {
         start: Point,
         end: Point,
         color: Color,
         thickness: f32,
+        #[serde(default)]
+        style: ShapeStyle,
     },
     Highlight {
         top_left: Point,
@@ -169,6 +178,8 @@ pub enum Annotation {
         color: Color,
         thickness: f32,
         radius: f32,
+        #[serde(default)]
+        style: ShapeStyle,
     },
     Spotlight {
         top_left: Point,
@@ -186,6 +197,136 @@ pub enum Annotation {
         size: Size,
         color: Color,
     },
+}
+
+/// How a shape is drawn: an outline, a dashed outline, or filled solid.
+/// Lines and arrows are solid or dashed; `Filled` draws them solid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShapeStyle {
+    #[default]
+    Outline,
+    Dashed,
+    Filled,
+}
+
+impl ShapeStyle {
+    /// The style after this one: Outline, Dashed, Filled, then Outline
+    /// again. For a line or an arrow (`fillable` false) Filled is skipped.
+    pub fn next(self, fillable: bool) -> Self {
+        match self {
+            ShapeStyle::Outline => ShapeStyle::Dashed,
+            ShapeStyle::Dashed if fillable => ShapeStyle::Filled,
+            ShapeStyle::Dashed | ShapeStyle::Filled => ShapeStyle::Outline,
+        }
+    }
+
+    /// What Settings, the tooltip and a screen reader call it.
+    pub fn label(self) -> &'static str {
+        match self {
+            ShapeStyle::Outline => "Outline",
+            ShapeStyle::Dashed => "Dashed",
+            ShapeStyle::Filled => "Filled",
+        }
+    }
+
+    /// The style named in config.toml; anything else is Outline.
+    pub fn parse(name: &str) -> Self {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "dashed" => ShapeStyle::Dashed,
+            "filled" | "fill" => ShapeStyle::Filled,
+            _ => ShapeStyle::Outline,
+        }
+    }
+}
+
+/// The stroke a shape of `thickness` is drawn with: solid, or dashes three
+/// thicknesses long with gaps of two (never under 4 and 3 pixels).
+fn shape_stroke(thickness: f32, style: ShapeStyle) -> Stroke {
+    let dash = (style == ShapeStyle::Dashed)
+        .then(|| {
+            let on = (thickness * 3.0).max(4.0);
+            let off = (thickness * 2.0).max(3.0);
+            tiny_skia::StrokeDash::new(vec![on, off], 0.0)
+        })
+        .flatten();
+    Stroke {
+        width: thickness,
+        dash,
+        ..Stroke::default()
+    }
+}
+
+/// Draw a closed shape's `path` the way `style` says.
+fn draw_shape(
+    pixmap: &mut Pixmap,
+    path: &tiny_skia::Path,
+    paint: &Paint,
+    thickness: f32,
+    style: ShapeStyle,
+) {
+    if style == ShapeStyle::Filled {
+        pixmap.fill_path(
+            path,
+            paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    // A filled shape keeps its outline too, so it is as big as the outline
+    // it was drawn with.
+    let stroke = shape_stroke(thickness, style);
+    pixmap.stroke_path(path, paint, &stroke, Transform::identity(), None);
+}
+
+/// Whether `kind` draws a shape that a style applies to, and whether that
+/// shape can be filled.
+pub fn styled_tool(kind: ToolKind) -> Option<bool> {
+    match kind {
+        ToolKind::Rectangle | ToolKind::Circle | ToolKind::RoundedRect => Some(true),
+        ToolKind::Line | ToolKind::Arrow => Some(false),
+        _ => None,
+    }
+}
+
+/// The style of a shape annotation; `None` for the others.
+pub fn annotation_style(annotation: &Annotation) -> Option<ShapeStyle> {
+    match annotation {
+        Annotation::Arrow { style, .. }
+        | Annotation::Rectangle { style, .. }
+        | Annotation::Ellipse { style, .. }
+        | Annotation::Line { style, .. }
+        | Annotation::RoundedRect { style, .. } => Some(*style),
+        _ => None,
+    }
+}
+
+/// Whether a shape annotation can be filled (a line or an arrow can't).
+pub fn annotation_fillable(annotation: &Annotation) -> bool {
+    matches!(
+        annotation,
+        Annotation::Rectangle { .. } | Annotation::Ellipse { .. } | Annotation::RoundedRect { .. }
+    )
+}
+
+/// Give a shape annotation `new_style`. Filled on a line or an arrow
+/// draws it solid. Annotations with no style are left alone.
+pub fn restyle_annotation(annotation: &mut Annotation, new_style: ShapeStyle) {
+    let fillable = annotation_fillable(annotation);
+    match annotation {
+        Annotation::Arrow { style, .. }
+        | Annotation::Rectangle { style, .. }
+        | Annotation::Ellipse { style, .. }
+        | Annotation::Line { style, .. }
+        | Annotation::RoundedRect { style, .. } => {
+            *style = match new_style {
+                ShapeStyle::Filled if !fillable => ShapeStyle::Outline,
+                s => s,
+            };
+        }
+        _ => {}
+    }
 }
 
 pub trait AnnotationTool {
@@ -479,6 +620,7 @@ fn render_with(
             size,
             color,
             thickness,
+            style,
         } => {
             let mut paint = Paint::default();
             let c: tiny_skia::Color = (*color).into();
@@ -488,11 +630,7 @@ fn render_with(
             let rect = tiny_skia::Rect::from_xywh(top_left.x, top_left.y, size.width, size.height);
             if let Some(rect) = rect {
                 let path = PathBuilder::from_rect(rect);
-                let stroke = Stroke {
-                    width: *thickness,
-                    ..Stroke::default()
-                };
-                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                draw_shape(pixmap, &path, &paint, *thickness, *style);
             }
         }
         Annotation::Arrow {
@@ -500,6 +638,7 @@ fn render_with(
             end,
             color,
             thickness,
+            style,
         } => {
             let mut paint = Paint::default();
             let c: tiny_skia::Color = (*color).into();
@@ -511,10 +650,7 @@ fn render_with(
             pb.move_to(start.x, start.y);
             pb.line_to(end.x, end.y);
             if let Some(path) = pb.finish() {
-                let stroke = Stroke {
-                    width: *thickness,
-                    ..Stroke::default()
-                };
+                let stroke = shape_stroke(*thickness, *style);
                 pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
             }
 
@@ -575,6 +711,7 @@ fn render_with(
             radius_y,
             color,
             thickness,
+            style,
         } => {
             let mut paint = Paint::default();
             let c: tiny_skia::Color = (*color).into();
@@ -597,11 +734,7 @@ fn render_with(
             pb.cubic_to(cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy);
             pb.close();
             if let Some(path) = pb.finish() {
-                let stroke = Stroke {
-                    width: *thickness,
-                    ..Stroke::default()
-                };
-                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                draw_shape(pixmap, &path, &paint, *thickness, *style);
             }
         }
         Annotation::Line {
@@ -609,6 +742,7 @@ fn render_with(
             end,
             color,
             thickness,
+            style,
         } => {
             let mut paint = Paint::default();
             let c: tiny_skia::Color = (*color).into();
@@ -619,10 +753,7 @@ fn render_with(
             pb.move_to(start.x, start.y);
             pb.line_to(end.x, end.y);
             if let Some(path) = pb.finish() {
-                let stroke = Stroke {
-                    width: *thickness,
-                    ..Stroke::default()
-                };
+                let stroke = shape_stroke(*thickness, *style);
                 pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
             }
         }
@@ -846,6 +977,7 @@ fn render_with(
             color,
             thickness,
             radius,
+            style,
         } => {
             if let Some(path) =
                 rounded_rect_path(top_left.x, top_left.y, size.width, size.height, *radius)
@@ -853,11 +985,7 @@ fn render_with(
                 let mut paint = Paint::default();
                 paint.set_color((*color).into());
                 paint.anti_alias = true;
-                let stroke = Stroke {
-                    width: *thickness,
-                    ..Stroke::default()
-                };
-                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                draw_shape(pixmap, &path, &paint, *thickness, *style);
             }
         }
         Annotation::Redact { .. } => {
@@ -1163,10 +1291,29 @@ pub fn hit_test_annotation(annotation: &Annotation, point: &Point, threshold: f3
         Annotation::Measurement { start, end, .. } => {
             point_to_segment_distance(point, start, end) < threshold + 1.0
         }
-        Annotation::Rectangle { top_left, size, .. }
-        | Annotation::RoundedRect { top_left, size, .. } => {
+        Annotation::Rectangle {
+            top_left,
+            size,
+            style,
+            ..
+        }
+        | Annotation::RoundedRect {
+            top_left,
+            size,
+            style,
+            ..
+        } => {
             let r = tiny_skia::Rect::from_xywh(top_left.x, top_left.y, size.width, size.height);
             if let Some(r) = r {
+                // A filled box can be picked up anywhere on it.
+                if *style == ShapeStyle::Filled
+                    && point.x >= r.left()
+                    && point.x <= r.right()
+                    && point.y >= r.top()
+                    && point.y <= r.bottom()
+                {
+                    return true;
+                }
                 let near_left = (point.x - r.left()).abs() < threshold
                     && point.y >= r.top() - threshold
                     && point.y <= r.bottom() + threshold;
@@ -1189,6 +1336,7 @@ pub fn hit_test_annotation(annotation: &Annotation, point: &Point, threshold: f3
             radius_x,
             radius_y,
             thickness,
+            style,
             ..
         } => {
             if *radius_x < 0.001 || *radius_y < 0.001 {
@@ -1197,6 +1345,9 @@ pub fn hit_test_annotation(annotation: &Annotation, point: &Point, threshold: f3
             let nx = (point.x - center.x) / radius_x;
             let ny = (point.y - center.y) / radius_y;
             let dist = (nx * nx + ny * ny).sqrt();
+            if *style == ShapeStyle::Filled && dist <= 1.0 {
+                return true;
+            }
             (dist - 1.0).abs()
                 < threshold / radius_x.min(*radius_y) + thickness / (2.0 * radius_x.min(*radius_y))
         }
@@ -1267,6 +1418,112 @@ pub fn move_annotation(annotation: &mut Annotation, dx: f32, dy: f32) {
         Annotation::Text { position, .. } | Annotation::StepMarker { position, .. } => {
             position.x += dx;
             position.y += dy;
+        }
+    }
+}
+
+/// Scale an annotation about the origin by `s`: positions, sizes, line
+/// widths and text together, as when the image under it is scaled.
+pub fn scale_annotation(annotation: &mut Annotation, s: f32) {
+    if (s - 1.0).abs() < f32::EPSILON || s <= 0.0 {
+        return;
+    }
+    let p = |p: &mut Point| {
+        p.x *= s;
+        p.y *= s;
+    };
+    let width = |t: &mut f32| *t = (*t * s).max(1.0);
+    match annotation {
+        Annotation::Arrow {
+            start,
+            end,
+            thickness,
+            ..
+        }
+        | Annotation::Line {
+            start,
+            end,
+            thickness,
+            ..
+        } => {
+            p(start);
+            p(end);
+            width(thickness);
+        }
+        Annotation::Measurement { start, end, .. } => {
+            p(start);
+            p(end);
+        }
+        Annotation::Rectangle {
+            top_left,
+            size,
+            thickness,
+            ..
+        } => {
+            p(top_left);
+            size.width *= s;
+            size.height *= s;
+            width(thickness);
+        }
+        Annotation::RoundedRect {
+            top_left,
+            size,
+            thickness,
+            radius,
+            ..
+        } => {
+            p(top_left);
+            size.width *= s;
+            size.height *= s;
+            *radius *= s;
+            width(thickness);
+        }
+        Annotation::Highlight { top_left, size, .. }
+        | Annotation::Redact { top_left, size, .. }
+        | Annotation::Spotlight { top_left, size } => {
+            p(top_left);
+            size.width *= s;
+            size.height *= s;
+        }
+        Annotation::Pixelate {
+            top_left,
+            size,
+            block_size,
+        } => {
+            p(top_left);
+            size.width *= s;
+            size.height *= s;
+            *block_size = ((*block_size as f32 * s).round() as u8).max(1);
+        }
+        Annotation::Ellipse {
+            center,
+            radius_x,
+            radius_y,
+            thickness,
+            ..
+        } => {
+            p(center);
+            *radius_x *= s;
+            *radius_y *= s;
+            width(thickness);
+        }
+        Annotation::Pencil {
+            points, thickness, ..
+        } => {
+            points.iter_mut().for_each(p);
+            width(thickness);
+        }
+        Annotation::Text {
+            position,
+            font_size,
+            ..
+        } => {
+            p(position);
+            *font_size = (*font_size * s).max(6.0);
+        }
+        Annotation::StepMarker { position, size, .. } => {
+            p(position);
+            *size = (*size * s).max(8.0);
         }
     }
 }

@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::tools::Annotation;
 
 const MAX_HISTORY: usize = 20;
 
@@ -116,7 +118,7 @@ pub fn list_history() -> Vec<PathBuf> {
     entries
 }
 
-/// Delete every history entry. Returns the number of files removed.
+/// Delete every history entry. Returns the number of captures removed.
 pub fn clear_history() -> usize {
     let Some(dir) = history_dir() else {
         return 0;
@@ -125,14 +127,131 @@ pub fn clear_history() -> usize {
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "png")
-                && std::fs::remove_file(&path).is_ok()
-            {
+            let ext = path.extension().and_then(|e| e.to_str());
+            if ext == Some("png") && std::fs::remove_file(&path).is_ok() {
                 removed += 1;
+            } else if ext == Some(MARKUP_EXT) {
+                let _ = std::fs::remove_file(&path);
             }
         }
     }
     removed
+}
+
+/// Delete one capture from history, with its markup.
+pub fn delete_entry(png: &Path) -> Result<(), String> {
+    let _ = std::fs::remove_file(markup_path(png));
+    match std::fs::remove_file(png) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Couldn't delete {}: {e}", png.display())),
+    }
+}
+
+// ───────────── markup: captures that can be edited again ─────────────
+
+/// The extension of the file that keeps a history capture editable.
+const MARKUP_EXT: &str = "markup";
+
+/// A capture as it was before its annotations were drawn in, and the
+/// annotations, with positions relative to its top left corner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Editable {
+    /// Straight RGBA8, row-major.
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub annotations: Vec<Annotation>,
+}
+
+/// The markup file as written: the clean capture as a base64 PNG, and the
+/// annotations.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MarkupFile {
+    version: u32,
+    width: u32,
+    height: u32,
+    image: String,
+    annotations: Vec<Annotation>,
+}
+
+/// Where the markup of the history capture `png` is kept.
+pub fn markup_path(png: &Path) -> PathBuf {
+    png.with_extension(MARKUP_EXT)
+}
+
+/// Keep the history capture `png` editable: write its clean image and
+/// annotations beside it.
+pub fn write_markup(png: &Path, editable: &Editable) -> Result<(), String> {
+    use base64::Engine;
+    let image = crate::export::encode_png(&editable.pixels, editable.width, editable.height)?;
+    let file = MarkupFile {
+        version: 1,
+        width: editable.width,
+        height: editable.height,
+        image: base64::engine::general_purpose::STANDARD.encode(image),
+        annotations: editable.annotations.clone(),
+    };
+    let json = serde_json::to_vec(&file).map_err(|e| e.to_string())?;
+    std::fs::write(markup_path(png), json).map_err(|e| format!("Couldn't keep the markup: {e}"))
+}
+
+/// A history capture, ready to edit: its clean image and annotations when
+/// its markup was kept, or else the saved picture with nothing to edit
+/// on it.
+pub fn load_editable(png: &Path) -> Result<Editable, String> {
+    match read_markup(png) {
+        Ok(Some(e)) => return Ok(e),
+        Ok(None) => {}
+        Err(e) => tracing::warn!("Ignoring the markup of {}: {e}", png.display()),
+    }
+    let image = image::open(png)
+        .map_err(|e| format!("Couldn't open {}: {e}", png.display()))?
+        .to_rgba8();
+    let (width, height) = image.dimensions();
+    Ok(Editable {
+        pixels: image.into_raw(),
+        width,
+        height,
+        annotations: Vec::new(),
+    })
+}
+
+fn read_markup(png: &Path) -> Result<Option<Editable>, String> {
+    use base64::Engine;
+    let bytes = match std::fs::read(markup_path(png)) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let file: MarkupFile = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if file.version != 1 {
+        return Err(format!(
+            "markup version {} is newer than this screen-mark",
+            file.version
+        ));
+    }
+    let png_bytes = base64::engine::general_purpose::STANDARD
+        .decode(file.image)
+        .map_err(|e| e.to_string())?;
+    let image = image::load_from_memory(&png_bytes)
+        .map_err(|e| e.to_string())?
+        .to_rgba8();
+    let (width, height) = image.dimensions();
+    if (width, height) != (file.width, file.height) {
+        return Err("the markup's image is the wrong size".into());
+    }
+    Ok(Some(Editable {
+        pixels: image.into_raw(),
+        width,
+        height,
+        annotations: file.annotations,
+    }))
+}
+
+/// Whether a history capture can be edited with its annotations.
+pub fn has_markup(png: &Path) -> bool {
+    markup_path(png).is_file()
 }
 
 fn prune_history(dir: &std::path::Path) {
@@ -146,6 +265,14 @@ fn prune_history(dir: &std::path::Path) {
     entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
     // Remove entries beyond MAX_HISTORY
     for path in entries.iter().skip(MAX_HISTORY) {
-        let _ = std::fs::remove_file(path);
+        let _ = delete_entry(path);
+    }
+    // Markup whose capture is gone.
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == MARKUP_EXT) && !path.with_extension("png").exists()
+        {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

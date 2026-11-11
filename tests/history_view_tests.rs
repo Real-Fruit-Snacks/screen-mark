@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
 use screen_mark::access::{Request, Role};
-use screen_mark::history_ui::{Focus, HistoryView, Outcome, COLS, WIN_H, WIN_W};
+use screen_mark::history_ui::{Act, Focus, HistoryView, Outcome, COLS, WIN_H, WIN_W};
 use screen_mark::keys::{Key, KeyPress, Mods, Named};
 
 static LOCK: Mutex<()> = Mutex::new(());
@@ -96,9 +96,14 @@ fn arrows_move_over_the_grid_and_enter_copies() {
     press(&mut v, Mods::NONE, Named::Right);
     press(&mut v, Mods::NONE, Named::Down);
     assert_eq!(v.focus(), Some(Focus::Capture(1 + COLS)));
-    // No row below, no capture further right: the focus stays.
-    assert_eq!(press(&mut v, Mods::NONE, Named::Down), Outcome::Nothing);
-    press(&mut v, Mods::NONE, Named::Right);
+    // No capture further right: the focus stays.
+    assert_eq!(press(&mut v, Mods::NONE, Named::Right), Outcome::Nothing);
+    assert_eq!(v.focus(), Some(Focus::Capture(5)));
+    // No row below: down is the buttons along the bottom, and up comes
+    // back to the capture they act on.
+    press(&mut v, Mods::NONE, Named::Down);
+    assert_eq!(v.focus(), Some(Focus::Action(Act::Copy)));
+    press(&mut v, Mods::NONE, Named::Up);
     assert_eq!(v.focus(), Some(Focus::Capture(5)));
     assert_eq!(
         press(&mut v, Mods::NONE, Named::Enter),
@@ -117,11 +122,11 @@ fn arrows_move_over_the_grid_and_enter_copies() {
 }
 
 #[test]
-fn tab_walks_the_button_then_every_capture() {
+fn tab_walks_the_captures_the_buttons_and_back() {
     let _home = Home::with_captures("tab", 3);
     let mut v = HistoryView::new();
     let mut seen = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..10 {
         press(&mut v, Mods::NONE, Named::Tab);
         seen.push(v.focus().unwrap());
     }
@@ -131,6 +136,11 @@ fn tab_walks_the_button_then_every_capture() {
             Focus::Capture(0),
             Focus::Capture(1),
             Focus::Capture(2),
+            Focus::Action(Act::Copy),
+            Focus::Action(Act::Edit),
+            Focus::Action(Act::SaveAs),
+            Focus::Action(Act::Show),
+            Focus::Action(Act::Delete),
             Focus::ClearAll,
             Focus::Capture(0)
         ]
@@ -138,7 +148,121 @@ fn tab_walks_the_button_then_every_capture() {
     press(&mut v, Mods::SHIFT, Named::Tab);
     assert_eq!(v.focus(), Some(Focus::ClearAll));
     press(&mut v, Mods::SHIFT, Named::Tab);
-    assert_eq!(v.focus(), Some(Focus::Capture(2)));
+    assert_eq!(v.focus(), Some(Focus::Action(Act::Delete)));
+    for _ in 0..4 {
+        press(&mut v, Mods::SHIFT, Named::Tab);
+    }
+    assert_eq!(v.focus(), Some(Focus::Action(Act::Copy)));
+    // Back from the buttons to the capture they act on.
+    press(&mut v, Mods::SHIFT, Named::Tab);
+    assert_eq!(v.focus(), Some(Focus::Capture(0)));
+}
+
+#[test]
+fn the_buttons_act_on_the_capture_clicked_last() {
+    let home = Home::with_captures("buttons", 5);
+    let mut v = HistoryView::new();
+    let middle = |r: (f32, f32, f32, f32)| (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
+
+    // Nothing picked yet: the buttons do nothing and say why.
+    let (x, y) = middle(Act::Edit.rect());
+    assert_eq!(v.click(x, y), Outcome::Nothing);
+    let edit = v
+        .snapshot()
+        .controls
+        .into_iter()
+        .find(|c| c.label.starts_with("Mark up"))
+        .unwrap();
+    assert_eq!(edit.label, "Mark up (pick a capture first)");
+
+    let (x, y) = middle(v.thumb_rect(2));
+    assert_eq!(v.click(x, y), Outcome::Copy(home.capture(2, 5)));
+    assert_eq!(v.current(), Some(2));
+    for (act, want) in [
+        (Act::Copy, Outcome::Copy(home.capture(2, 5))),
+        (Act::Edit, Outcome::Edit(home.capture(2, 5))),
+        (Act::SaveAs, Outcome::SaveAs(home.capture(2, 5))),
+        (Act::Show, Outcome::Show(home.capture(2, 5))),
+    ] {
+        let (x, y) = middle(act.rect());
+        assert_eq!(v.click(x, y), want, "{act:?}");
+    }
+    assert!(v
+        .snapshot()
+        .controls
+        .iter()
+        .any(|c| c.label == "Mark up capture 3 again"));
+
+    // Delete removes the file, and the next capture takes its place.
+    let (x, y) = middle(Act::Delete.rect());
+    assert_eq!(v.click(x, y), Outcome::Redraw);
+    assert_eq!(v.len(), 4);
+    assert!(!home.capture(2, 5).exists());
+    assert_eq!(v.current(), Some(2));
+    assert_eq!(
+        v.act(Act::Copy),
+        Outcome::Copy(home.capture(3, 5)),
+        "the one after the deleted one"
+    );
+}
+
+#[test]
+fn letters_and_delete_work_on_the_focused_capture() {
+    let home = Home::with_captures("letters", 3);
+    let mut v = HistoryView::new();
+    let letter = |v: &mut HistoryView, c: char| {
+        v.key(KeyPress {
+            mods: Mods::NONE,
+            key: Some(Key::Char(c)),
+            pressed: true,
+        })
+    };
+    assert_eq!(letter(&mut v, 'e'), Outcome::Nothing, "nothing focused yet");
+    press(&mut v, Mods::NONE, Named::End);
+    assert_eq!(letter(&mut v, 'e'), Outcome::Edit(home.capture(2, 3)));
+    assert_eq!(letter(&mut v, 's'), Outcome::SaveAs(home.capture(2, 3)));
+    assert_eq!(letter(&mut v, 'o'), Outcome::Show(home.capture(2, 3)));
+    assert_eq!(letter(&mut v, 'q'), Outcome::Nothing);
+    assert_eq!(press(&mut v, Mods::NONE, Named::Delete), Outcome::Redraw);
+    assert_eq!(v.len(), 2);
+    // The last one went: the focus moves to the one before it.
+    assert_eq!(v.focus(), Some(Focus::Capture(1)));
+    press(&mut v, Mods::NONE, Named::Delete);
+    press(&mut v, Mods::NONE, Named::Delete);
+    assert!(v.is_empty());
+    assert_eq!(v.focus(), None);
+    assert_eq!(press(&mut v, Mods::NONE, Named::Delete), Outcome::Nothing);
+}
+
+#[test]
+fn a_capture_with_kept_markup_says_so() {
+    let home = Home::with_captures("markup", 2);
+    let png = home.capture(0, 2);
+    let editable = screen_mark::history::Editable {
+        pixels: vec![200; 60 * 40 * 4],
+        width: 60,
+        height: 40,
+        annotations: vec![screen_mark::tools::Annotation::Rectangle {
+            top_left: screen_mark::geometry::Point::new(5.0, 5.0),
+            size: screen_mark::geometry::Size::new(20.0, 10.0),
+            color: screen_mark::geometry::Color::red(),
+            thickness: 3.0,
+            style: screen_mark::tools::ShapeStyle::Dashed,
+        }],
+    };
+    screen_mark::history::write_markup(&png, &editable).unwrap();
+    let v = HistoryView::new();
+    let labels: Vec<String> = v.snapshot().controls.into_iter().map(|c| c.label).collect();
+    assert!(
+        labels[1].ends_with("its annotations can be changed. Copy it again"),
+        "{labels:?}"
+    );
+    assert!(!labels[2].contains("annotations"), "{labels:?}");
+    // And it loads back with its annotations, the image as it was before.
+    assert_eq!(screen_mark::history::load_editable(&png).unwrap(), editable);
+    // Deleting it takes the markup too.
+    screen_mark::history::delete_entry(&png).unwrap();
+    assert!(!screen_mark::history::markup_path(&png).exists());
 }
 
 #[test]
@@ -178,7 +302,11 @@ fn every_capture_is_described_for_a_screen_reader() {
     let mut v = HistoryView::new();
     let snap = v.snapshot();
     assert_eq!(snap.title, "screen-mark History");
-    assert_eq!(snap.controls.len(), 7, "the button and six captures");
+    assert_eq!(
+        snap.controls.len(),
+        12,
+        "the button, six captures and five buttons"
+    );
     assert_eq!(snap.controls[0].label, "Clear all captures from History");
     assert!(snap.controls.iter().all(|c| c.role == Role::Button));
     assert!(

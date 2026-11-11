@@ -512,18 +512,21 @@ fn every_kind() -> Vec<screen_mark::tools::Annotation> {
     let presets = Color::presets();
     vec![
         Annotation::Arrow {
+            style: Default::default(),
             start: p(60.0, 60.0),
             end: p(150.0, 95.0),
             color: presets[0],
             thickness: 9.0,
         },
         Annotation::Rectangle {
+            style: Default::default(),
             top_left: p(170.5, 40.5),
             size: Size::new(70.0, 44.0),
             color: presets[1],
             thickness: 6.0,
         },
         Annotation::RoundedRect {
+            style: Default::default(),
             top_left: p(260.0, 44.0),
             size: Size::new(60.0, 40.0),
             color: presets[2],
@@ -531,6 +534,7 @@ fn every_kind() -> Vec<screen_mark::tools::Annotation> {
             radius: 12.0,
         },
         Annotation::Ellipse {
+            style: Default::default(),
             center: p(370.0, 70.0),
             radius_x: 34.0,
             radius_y: 22.0,
@@ -538,6 +542,7 @@ fn every_kind() -> Vec<screen_mark::tools::Annotation> {
             thickness: 5.0,
         },
         Annotation::Line {
+            style: Default::default(),
             start: p(60.0, 130.0),
             end: p(140.0, 118.0),
             color: presets[4],

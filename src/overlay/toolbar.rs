@@ -5,7 +5,7 @@ use crate::tools::ToolKind;
 pub const TOOLBAR_HEIGHT: f32 = 40.0;
 pub const TOOLBAR_PADDING: f32 = 8.0;
 pub const BUTTON_SIZE: f32 = 32.0;
-pub const BUTTON_COUNT: usize = 25;
+pub const BUTTON_COUNT: usize = 27;
 
 /// What a toolbar button does when clicked.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,8 +14,12 @@ pub enum ButtonAction {
     Tool(ToolKind),
     /// Select a preset color (index into `Color::presets()`).
     Color(usize),
+    /// Switch the shape style: outline, dashed, filled.
+    Style,
     Ocr,
     Upload,
+    /// Run the command set in `[send] command` on the capture.
+    Send,
     Pin,
     Copy,
     Save,
@@ -110,6 +114,11 @@ pub const BUTTONS: [ButtonDef; BUTTON_COUNT] = [
         tooltip: "Redact: solid box (X)",
     },
     ButtonDef {
+        action: ButtonAction::Style,
+        icon: Some("style-outline"),
+        tooltip: "Style: outline, dashed or filled (D)",
+    },
+    ButtonDef {
         action: ButtonAction::Color(0),
         icon: None,
         tooltip: "Red #ff6e7a (right-click: pick)",
@@ -143,6 +152,11 @@ pub const BUTTONS: [ButtonDef; BUTTON_COUNT] = [
         action: ButtonAction::Upload,
         icon: Some("upload"),
         tooltip: "Upload (Imgur)",
+    },
+    ButtonDef {
+        action: ButtonAction::Send,
+        icon: Some("send"),
+        tooltip: "Send (runs your command)",
     },
     ButtonDef {
         action: ButtonAction::Pin,

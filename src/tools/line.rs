@@ -36,6 +36,7 @@ impl LineTool {
             return None;
         }
         Some(Annotation::Line {
+            style: super::ShapeStyle::Outline,
             start,
             end,
             color: self.color,

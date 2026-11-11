@@ -22,6 +22,10 @@ pub enum Item {
     LastRegion,
     Window,
     Delay(u32),
+    /// Mark up an image file (asks which).
+    EditFile,
+    /// Mark up the image on the clipboard.
+    EditClipboard,
     OpenFolder,
     History,
     Autostart,
@@ -104,6 +108,8 @@ fn build(
     let d3 = plain("Capture in 3s");
     let d5 = plain("Capture in 5s");
     let d10 = plain("Capture in 10s");
+    let edit_file = plain("Mark up an image...");
+    let edit_clipboard = plain("Mark up the clipboard image");
     let folder = plain("Open captures folder");
     let history = plain("History");
     let settings = plain("Settings");
@@ -118,6 +124,8 @@ fn build(
         (&d3, Item::Delay(3)),
         (&d5, Item::Delay(5)),
         (&d10, Item::Delay(10)),
+        (&edit_file, Item::EditFile),
+        (&edit_clipboard, Item::EditClipboard),
         (&folder, Item::OpenFolder),
         (&history, Item::History),
         (&settings, Item::Settings),
@@ -139,6 +147,9 @@ fn build(
     ])
     .map_err(err)?;
     menu.append_items(&[&d3, &d5, &d10]).map_err(err)?;
+    menu.append(&sep()).map_err(err)?;
+    menu.append_items(&[&edit_file, &edit_clipboard])
+        .map_err(err)?;
     menu.append(&sep()).map_err(err)?;
     menu.append_items(&[&folder, &history]).map_err(err)?;
     menu.append(&autostart_check).map_err(err)?;

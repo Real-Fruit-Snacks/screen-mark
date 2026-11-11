@@ -28,6 +28,13 @@ pub enum Commands {
         delay: u64,
     },
 
+    /// Mark up an image file (PNG, JPEG, WebP or BMP), or with no file,
+    /// the image on the clipboard
+    Edit {
+        /// The image to mark up; leave it out to use the clipboard's
+        file: Option<std::path::PathBuf>,
+    },
+
     /// Install screen-mark to your system (copies to AppData, adds Start Menu shortcut and PATH)
     Install,
 

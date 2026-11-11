@@ -47,6 +47,14 @@ action_default!(a_save, "Ctrl+S");
 action_default!(a_undo, "Ctrl+Z");
 action_default!(a_redo, "Ctrl+Shift+Z");
 action_default!(a_select_all, "Ctrl+A");
+action_default!(a_style, "d");
+
+fn d_shape_style() -> String {
+    "outline".into()
+}
+fn d_file_name() -> String {
+    crate::export::DEFAULT_FILE_NAME.into()
+}
 
 macro_rules! key_default {
     ($fn_name:ident, $key:expr) => {
@@ -111,6 +119,15 @@ pub struct GeneralConfig {
     /// is what those versions did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ask_where_to_save: Option<bool>,
+    /// How rectangles, circles, lines and arrows start out drawn:
+    /// "outline", "dashed" or "filled" (`D` switches while marking up).
+    #[serde(default = "d_shape_style")]
+    pub shape_style: String,
+    /// The name a capture is saved under, without ".png". Placeholders:
+    /// {date} {time} {year} {month} {day} {hour} {minute} {second}
+    /// {width} {height}. See `export::file_stem`.
+    #[serde(default = "d_file_name")]
+    pub file_name: String,
 }
 
 impl Default for GeneralConfig {
@@ -128,6 +145,8 @@ impl Default for GeneralConfig {
             screenshot_area: d_screenshot_area(),
             notifications: d_notifications(),
             ask_where_to_save: None,
+            shape_style: d_shape_style(),
+            file_name: d_file_name(),
         }
     }
 }
@@ -176,6 +195,12 @@ pub struct KeysConfig {
     pub ocr: String,
     #[serde(default)]
     pub upload: String,
+    /// Run `[send] command` on the capture.
+    #[serde(default)]
+    pub send: String,
+    /// Switch the shape style: outline, dashed, filled.
+    #[serde(default = "a_style")]
+    pub style: String,
 }
 
 impl Default for KeysConfig {
@@ -189,6 +214,8 @@ impl Default for KeysConfig {
             pin: String::new(),
             ocr: String::new(),
             upload: String::new(),
+            send: String::new(),
+            style: a_style(),
         }
     }
 }
@@ -465,6 +492,22 @@ pub struct Config {
     pub toolbar: ToolbarConfig,
     #[serde(default)]
     pub updates: UpdatesConfig,
+    #[serde(default)]
+    pub send: SendConfig,
+}
+
+/// The Send action: a command of your own that gets the capture.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SendConfig {
+    /// The program and its arguments, split like a shell would ("..." and
+    /// '...' group words). {file} is replaced by the path of a PNG of the
+    /// capture; with no {file}, the path goes last. What the command prints
+    /// is copied. Empty: no Send button.
+    #[serde(default)]
+    pub command: String,
+    /// What the button's tooltip and the popups call it ("Send" if empty).
+    #[serde(default)]
+    pub name: String,
 }
 
 impl Config {
@@ -654,6 +697,8 @@ impl Config {
             KeyId::Pin => self.keys.pin.clone(),
             KeyId::Ocr => self.keys.ocr.clone(),
             KeyId::Upload => self.keys.upload.clone(),
+            KeyId::Send => self.keys.send.clone(),
+            KeyId::Style => self.keys.style.clone(),
             KeyId::Tool(i) => self
                 .shortcuts
                 .entries()
@@ -677,6 +722,8 @@ impl Config {
             KeyId::Pin => self.keys.pin = value,
             KeyId::Ocr => self.keys.ocr = value,
             KeyId::Upload => self.keys.upload = value,
+            KeyId::Send => self.keys.send = value,
+            KeyId::Style => self.keys.style = value,
             KeyId::Tool(i) => self.shortcuts.set_by_index(i, value),
         }
     }

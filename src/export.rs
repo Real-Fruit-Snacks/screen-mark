@@ -1,4 +1,3 @@
-use crate::geometry::{Point, Size};
 use crate::tools::{render_annotations, Annotation, Backdrop};
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
@@ -113,137 +112,9 @@ pub fn crop_and_flatten(
 
 /// Offset an annotation's coordinates by (-dx, -dy).
 fn offset_annotation(annotation: &Annotation, dx: f32, dy: f32) -> Annotation {
-    match annotation {
-        Annotation::Arrow {
-            start,
-            end,
-            color,
-            thickness,
-        } => Annotation::Arrow {
-            start: Point::new(start.x - dx, start.y - dy),
-            end: Point::new(end.x - dx, end.y - dy),
-            color: *color,
-            thickness: *thickness,
-        },
-        Annotation::Rectangle {
-            top_left,
-            size,
-            color,
-            thickness,
-        } => Annotation::Rectangle {
-            top_left: Point::new(top_left.x - dx, top_left.y - dy),
-            size: Size::new(size.width, size.height),
-            color: *color,
-            thickness: *thickness,
-        },
-        Annotation::Pencil {
-            points,
-            color,
-            thickness,
-        } => Annotation::Pencil {
-            points: points
-                .iter()
-                .map(|p| Point::new(p.x - dx, p.y - dy))
-                .collect(),
-            color: *color,
-            thickness: *thickness,
-        },
-        Annotation::Text {
-            position,
-            text,
-            color,
-            font_size,
-        } => Annotation::Text {
-            position: Point::new(position.x - dx, position.y - dy),
-            text: text.clone(),
-            color: *color,
-            font_size: *font_size,
-        },
-        Annotation::Pixelate {
-            top_left,
-            size,
-            block_size,
-        } => Annotation::Pixelate {
-            top_left: Point::new(top_left.x - dx, top_left.y - dy),
-            size: Size::new(size.width, size.height),
-            block_size: *block_size,
-        },
-        Annotation::Ellipse {
-            center,
-            radius_x,
-            radius_y,
-            color,
-            thickness,
-        } => Annotation::Ellipse {
-            center: Point::new(center.x - dx, center.y - dy),
-            radius_x: *radius_x,
-            radius_y: *radius_y,
-            color: *color,
-            thickness: *thickness,
-        },
-        Annotation::Line {
-            start,
-            end,
-            color,
-            thickness,
-        } => Annotation::Line {
-            start: Point::new(start.x - dx, start.y - dy),
-            end: Point::new(end.x - dx, end.y - dy),
-            color: *color,
-            thickness: *thickness,
-        },
-        Annotation::Highlight {
-            top_left,
-            size,
-            color,
-        } => Annotation::Highlight {
-            top_left: Point::new(top_left.x - dx, top_left.y - dy),
-            size: Size::new(size.width, size.height),
-            color: *color,
-        },
-        Annotation::StepMarker {
-            position,
-            number,
-            color,
-            size,
-        } => Annotation::StepMarker {
-            position: Point::new(position.x - dx, position.y - dy),
-            number: *number,
-            color: *color,
-            size: *size,
-        },
-        Annotation::RoundedRect {
-            top_left,
-            size,
-            color,
-            thickness,
-            radius,
-        } => Annotation::RoundedRect {
-            top_left: Point::new(top_left.x - dx, top_left.y - dy),
-            size: Size::new(size.width, size.height),
-            color: *color,
-            thickness: *thickness,
-            radius: *radius,
-        },
-        Annotation::Spotlight { top_left, size } => Annotation::Spotlight {
-            top_left: Point::new(top_left.x - dx, top_left.y - dy),
-            size: Size::new(size.width, size.height),
-        },
-        Annotation::Measurement { start, end, color } => Annotation::Measurement {
-            start: Point::new(start.x - dx, start.y - dy),
-            end: Point::new(end.x - dx, end.y - dy),
-            color: *color,
-        },
-        Annotation::Redact {
-            top_left,
-            size,
-            color,
-        } => Annotation::Redact {
-            top_left: Point::new(top_left.x - dx, top_left.y - dy),
-            size: Size::new(size.width, size.height),
-            color: *color,
-        },
-    }
+    let mut moved = annotation.clone();
+    crate::tools::move_annotation(&mut moved, -dx, -dy);
+    moved
 }
 
 /// The process keeps one clipboard handle for its whole life. On X11 and
@@ -253,6 +124,34 @@ fn offset_annotation(annotation: &Annotation, dx: f32, dy: f32) -> Annotation {
 /// 2.0 did, on a worker thread) meant the image was gone before anyone
 /// could paste it, unless a clipboard manager grabbed it first.
 static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
+
+/// Copy text to the system clipboard, through the same long-lived handle as
+/// images (see `CLIPBOARD`), so on Linux it is still there to paste.
+pub fn copy_text(text: &str) -> Result<(), String> {
+    let mut guard = CLIPBOARD.lock().unwrap_or_else(|p| p.into_inner());
+    let mut last_err = String::new();
+    for _ in 0..2 {
+        if guard.is_none() {
+            match arboard::Clipboard::new() {
+                Ok(c) => *guard = Some(c),
+                Err(e) => {
+                    last_err = format!("Failed to open clipboard: {e}");
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                    continue;
+                }
+            }
+        }
+        match guard.as_mut().expect("set above").set_text(text) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = format!("Failed to copy text to clipboard: {e}");
+                *guard = None;
+                std::thread::sleep(std::time::Duration::from_millis(60));
+            }
+        }
+    }
+    Err(last_err)
+}
 
 /// Copy pixel data to the system clipboard.
 ///
@@ -313,10 +212,88 @@ pub fn encode_png(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Str
     Ok(out)
 }
 
+/// The name captures are saved under unless `file_name` in config.toml
+/// says otherwise.
+pub const DEFAULT_FILE_NAME: &str = "screen-mark_{date}_{time}";
+
+/// The `file_name` pattern in use (see `set_file_name`).
+static FILE_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Use `pattern` for the captures saved from now on (`file_name` in
+/// config.toml). Empty means the default.
+pub fn set_file_name(pattern: &str) {
+    let mut name = FILE_NAME.lock().unwrap_or_else(|e| e.into_inner());
+    *name = pattern.to_string();
+}
+
+/// The `file_name` pattern set by `set_file_name`, or the default.
+pub fn file_name_pattern() -> String {
+    let name = FILE_NAME.lock().unwrap_or_else(|e| e.into_inner());
+    match name.trim() {
+        "" => DEFAULT_FILE_NAME.to_string(),
+        n => n.to_string(),
+    }
+}
+
 /// The file name screen-mark gives a capture taken at `when`, before any
 /// `_2`, `_3` suffix: `screen-mark_2026-10-28_143012.png`.
 pub fn capture_file_stem(when: chrono::DateTime<chrono::Local>) -> String {
-    when.format("screen-mark_%Y-%m-%d_%H%M%S").to_string()
+    file_stem(DEFAULT_FILE_NAME, when, 0, 0)
+}
+
+/// A file name (without ".png") from a `file_name` pattern. Placeholders:
+///
+/// | | |
+/// |---|---|
+/// | `{date}` | 2026-10-28 |
+/// | `{time}` | 143012 |
+/// | `{year}` `{month}` `{day}` | 2026, 10, 28 |
+/// | `{hour}` `{minute}` `{second}` | 14, 30, 12 |
+/// | `{width}` `{height}` | the capture's size in pixels |
+///
+/// Anything else is kept as written. Characters a file name can't hold
+/// (`\ / : * ? " < > |`) become `-`, so a pattern never names a folder.
+/// A pattern that comes out empty gives the default name.
+pub fn file_stem(
+    pattern: &str,
+    when: chrono::DateTime<chrono::Local>,
+    width: u32,
+    height: u32,
+) -> String {
+    let pattern = pattern.trim();
+    let pattern = pattern
+        .strip_suffix(".png")
+        .or_else(|| pattern.strip_suffix(".PNG"))
+        .unwrap_or(pattern);
+    let mut out = pattern.to_string();
+    for (token, value) in [
+        ("{date}", when.format("%Y-%m-%d").to_string()),
+        ("{time}", when.format("%H%M%S").to_string()),
+        ("{year}", when.format("%Y").to_string()),
+        ("{month}", when.format("%m").to_string()),
+        ("{day}", when.format("%d").to_string()),
+        ("{hour}", when.format("%H").to_string()),
+        ("{minute}", when.format("%M").to_string()),
+        ("{second}", when.format("%S").to_string()),
+        ("{width}", width.to_string()),
+        ("{height}", height.to_string()),
+    ] {
+        out = out.replace(token, &value);
+    }
+    let cleaned: String = out
+        .chars()
+        .map(|c| match c {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_control() => '-',
+            c => c,
+        })
+        .collect();
+    // Windows drops trailing dots and spaces from a name.
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']).to_string();
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '-') {
+        return file_stem(DEFAULT_FILE_NAME, when, width, height);
+    }
+    cleaned
 }
 
 /// Write `png` into `dir` under `<stem>.png`, or `<stem>_2.png`,
@@ -387,7 +364,8 @@ pub fn save_capture(
     dir: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
     let png = encode_png(pixels, width, height)?;
-    write_unique(dir, &capture_file_stem(chrono::Local::now()), &png)
+    let stem = file_stem(&file_name_pattern(), chrono::Local::now(), width, height);
+    write_unique(dir, &stem, &png)
 }
 
 /// True if `dir` or one of its parents exists as something other than a
@@ -413,7 +391,8 @@ fn short_io_error(e: &std::io::Error) -> String {
 ///
 /// When `default_dir` is `Some`, auto-saves to that directory with a
 /// timestamped PNG filename (no dialog). When `None`, opens a native save
-/// dialog offering PNG, JPEG, and WebP formats.
+/// dialog offering PNG, JPEG, and WebP formats, with `suggested` (a name
+/// without its extension) filled in, or else the `file_name` pattern's.
 ///
 /// Returns `Ok(Some(path))` on success, `Ok(None)` if the user cancelled,
 /// or `Err` on failure.
@@ -422,8 +401,13 @@ pub fn save_to_file(
     width: u32,
     height: u32,
     default_dir: Option<&std::path::Path>,
+    suggested: Option<&str>,
 ) -> Result<Option<String>, String> {
-    let default_name = format!("{}.png", capture_file_stem(chrono::Local::now()));
+    let stem = match suggested {
+        Some(name) => name.to_string(),
+        None => file_stem(&file_name_pattern(), chrono::Local::now(), width, height),
+    };
+    let default_name = format!("{stem}.png");
 
     if let Some(dir) = default_dir {
         // Auto-save (no dialog), always PNG, never overwriting.

@@ -13,6 +13,7 @@ fn rounded_rect_produces_annotation_with_correct_radius() {
     assert!(ann.is_some());
     match ann.unwrap() {
         Annotation::RoundedRect {
+            style: _,
             top_left,
             size,
             color,
@@ -63,6 +64,7 @@ fn set_radius_clamping() {
 fn rounded_rect_render_smoke_test() {
     let mut pixmap = tiny_skia::Pixmap::new(200, 200).unwrap();
     let ann = Annotation::RoundedRect {
+        style: Default::default(),
         top_left: Point::new(20.0, 20.0),
         size: Size::new(100.0, 80.0),
         color: Color::red(),
