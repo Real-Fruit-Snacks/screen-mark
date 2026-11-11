@@ -33,4 +33,16 @@ pub enum Commands {
 
     /// Uninstall screen-mark from your system
     Uninstall,
+
+    /// Update screen-mark to the newest release
+    Update {
+        /// Only say whether there is a newer release; install nothing
+        #[arg(long)]
+        check: bool,
+
+        /// Where to look instead of GitHub: a web folder or a folder path
+        /// that holds latest.json, its signature and the downloads
+        #[arg(long, value_name = "URL_OR_FOLDER")]
+        from: Option<String>,
+    },
 }

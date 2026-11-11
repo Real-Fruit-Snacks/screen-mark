@@ -192,3 +192,84 @@ fn crop_and_flatten_offsets_annotations() {
         "Expected annotation to be rendered in the cropped output"
     );
 }
+
+#[test]
+fn spotlight_is_part_of_the_exported_image() {
+    // A mid-grey capture with a spotlight in the middle: outside it the
+    // exported pixels are dimmed, inside they are untouched.
+    let (w, h) = (40u32, 30u32);
+    let pixels: Vec<u8> = (0..w * h).flat_map(|_| [200u8, 200, 200, 255]).collect();
+    let spot = Annotation::Spotlight {
+        top_left: Point::new(10.0, 10.0),
+        size: Size::new(20.0, 10.0),
+    };
+    let out = flatten_annotations(&pixels, w, h, &[spot]);
+    let px = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [out[i], out[i + 1], out[i + 2], out[i + 3]]
+    };
+    assert_eq!(px(15, 15), [200, 200, 200, 255], "inside the spotlight");
+    let outside = px(2, 2);
+    assert!(
+        outside[0] < 120 && outside[3] == 255,
+        "outside the spotlight should be dimmed, got {outside:?}"
+    );
+}
+
+fn save_dir(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("sm-export-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+#[test]
+fn write_image_picks_the_format_from_the_extension() {
+    use screen_mark::export::write_image;
+    let dir = save_dir("formats");
+    let (w, h) = (8u32, 6u32);
+    let pixels: Vec<u8> = (0..w * h)
+        .flat_map(|i| [i as u8 * 5, 80, 160, 255])
+        .collect();
+
+    // PNG, WebP and BMP keep every pixel.
+    for name in ["shot.png", "shot.webp", "shot.bmp", "SHOT.PNG"] {
+        let path = dir.join(name);
+        write_image(&path, pixels.clone(), w, h).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let back = image::open(&path).unwrap().to_rgba8();
+        assert_eq!(back.dimensions(), (w, h), "{name}");
+        assert_eq!(back.into_raw(), pixels, "{name}");
+    }
+
+    // JPEG has no alpha channel; the capture is written without one
+    // instead of failing.
+    let jpg = dir.join("shot.jpg");
+    write_image(&jpg, pixels.clone(), w, h).expect("a capture saves as JPEG");
+    assert_eq!(image::open(&jpg).unwrap().to_rgb8().dimensions(), (w, h));
+
+    // No extension: a PNG under that name.
+    let bare = dir.join("shot");
+    write_image(&bare, pixels.clone(), w, h).unwrap();
+    assert_eq!(&std::fs::read(&bare).unwrap()[1..4], b"PNG");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn write_image_says_which_formats_it_writes() {
+    use screen_mark::export::write_image;
+    let dir = save_dir("unknown");
+    let path = dir.join("shot.tiff");
+    let err = write_image(&path, vec![0, 0, 0, 255], 1, 1).unwrap_err();
+    assert!(
+        err.contains(".tiff") && err.contains("PNG, JPEG, WebP or BMP"),
+        "{err}"
+    );
+    assert!(
+        !path.exists(),
+        "nothing is written for a format it can't write"
+    );
+    // Pixels that don't match the size are refused too.
+    assert!(write_image(&dir.join("a.png"), vec![0; 7], 2, 2).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -106,6 +106,9 @@
       g.append(el('line', { x1: s.a.x, y1: s.a.y, x2: s.b.x, y2: s.b.y, style: st }));
     } else if (s.kind === 'pencil') {
       g.append(el('polyline', { points: s.pts.map((p) => p.x + ',' + p.y).join(' '), style: st }));
+    } else if (s.kind === 'redact') {
+      // Solid, like the app's: what is under it is gone
+      g.append(el('rect', { x, y, width: w, height: h, style: 'fill:#000' }));
     } else if (s.kind === 'highlight') {
       // A web page can't multiply into the pixels under it, so the highlight is see-through instead
       g.append(el('rect', { x, y, width: w, height: h, style: `fill:${s.color};fill-opacity:.4` }));
@@ -205,7 +208,7 @@ ${stamp()}`),
   const pixelsOnly = (t) => say(`${PIXELS[t]} works in the app`, 'It needs the captured pixels, which a web page doesn’t have. Shapes work here.');
 
   // --- Tools and colors ---
-  const KEYS = { v: 'select', a: 'arrow', r: 'rect', c: 'circle', o: 'rounded', l: 'line', p: 'pencil', h: 'highlight', f: 'spotlight', t: 'text', b: 'pixelate', n: 'step', i: 'eyedropper', m: 'measure' };
+  const KEYS = { v: 'select', a: 'arrow', r: 'rect', c: 'circle', o: 'rounded', l: 'line', p: 'pencil', h: 'highlight', f: 'spotlight', t: 'text', b: 'pixelate', n: 'step', i: 'eyedropper', m: 'measure', x: 'redact' };
   const keyOf = Object.fromEntries(Object.entries(KEYS).map(([k, v]) => [v, k]));
   // A tool the visitor picked (not the starting one) arms click-then-click drawing
   function pick(name, byUser = true) {
@@ -226,7 +229,7 @@ ${stamp()}`),
   const stepNo = () => shapes.filter((x) => x.kind === 'step').length + 1 + (stage.classList.contains('is-clean') ? 0 : 1);
 
   // Without a mouse to drag with (keyboard, touch), a tool button draws an example of its shape
-  const NAMES = { arrow: 'an arrow', rect: 'a rectangle', circle: 'a circle', rounded: 'a rounded rectangle', line: 'a line', pencil: 'a pencil stroke', highlight: 'a highlight', spotlight: 'a spotlight', step: 'a step marker', measure: 'a measurement' };
+  const NAMES = { arrow: 'an arrow', rect: 'a rectangle', circle: 'a circle', rounded: 'a rounded rectangle', line: 'a line', pencil: 'a pencil stroke', highlight: 'a highlight', spotlight: 'a spotlight', step: 'a step marker', measure: 'a measurement', redact: 'a redaction box' };
   const SELECT_NOTE = ['Select', 'In the app it moves what you drew. Here, drag outside the selection for a new one.'];
   function sample(t) {
     if (!rect) return;
@@ -278,7 +281,7 @@ ${stamp()}`),
   }
   roving(bar, [...bar.querySelectorAll('button')], 1);
 
-  // --- The key plate in Fourteen tools: click or tap a key to pick its tool ---
+  // --- The key plate in Fifteen tools: click or tap a key to pick its tool ---
   if (kb) {
     kb.inert = false;
     const keys = [...kb.querySelectorAll('button.key')];

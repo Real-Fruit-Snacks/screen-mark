@@ -5,7 +5,7 @@ use crate::tools::ToolKind;
 pub const TOOLBAR_HEIGHT: f32 = 40.0;
 pub const TOOLBAR_PADDING: f32 = 8.0;
 pub const BUTTON_SIZE: f32 = 32.0;
-pub const BUTTON_COUNT: usize = 24;
+pub const BUTTON_COUNT: usize = 25;
 
 /// What a toolbar button does when clicked.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,9 +29,10 @@ pub struct ButtonDef {
     pub tooltip: &'static str,
 }
 
-/// Single source of truth for the toolbar. Array order defines the "original"
-/// button indices that `ToolbarConfig::visible_button_indices()` refers to:
-/// 0-13 tools, 14-18 color swatches, 19-23 actions.
+/// Single source of truth for the toolbar. Array order defines the button
+/// indices that `ToolbarConfig::visible_button_indices()` refers to: the
+/// tools first, in `tools::TOOL_ORDER`, then the colour swatches, then the
+/// actions.
 pub const BUTTONS: [ButtonDef; BUTTON_COUNT] = [
     ButtonDef {
         action: ButtonAction::Tool(ToolKind::Select),
@@ -102,6 +103,11 @@ pub const BUTTONS: [ButtonDef; BUTTON_COUNT] = [
         action: ButtonAction::Tool(ToolKind::Measurement),
         icon: Some("measurement"),
         tooltip: "Measurement (M)",
+    },
+    ButtonDef {
+        action: ButtonAction::Tool(ToolKind::Redact),
+        icon: Some("redact"),
+        tooltip: "Redact: solid box (X)",
     },
     ButtonDef {
         action: ButtonAction::Color(0),

@@ -69,6 +69,7 @@ key_default!(k_pixelate, "b");
 key_default!(k_step_marker, "n");
 key_default!(k_eyedropper, "i");
 key_default!(k_measurement, "m");
+key_default!(k_redact, "x");
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GeneralConfig {
@@ -93,6 +94,10 @@ pub struct GeneralConfig {
     /// or a window is picked, skipping the markup toolbar.
     #[serde(default)]
     pub finish_on_release: bool,
+    /// Show a magnifier beside the pointer while a region is being placed,
+    /// dragged out or resized.
+    #[serde(default = "default_true")]
+    pub magnifier: bool,
     /// What the one-press screenshot hotkey grabs: "monitor" (the one under
     /// the mouse) or "all" (every monitor as one image).
     #[serde(default = "d_screenshot_area")]
@@ -119,6 +124,7 @@ impl Default for GeneralConfig {
             theme: d_theme(),
             copy_also_saves: false,
             finish_on_release: false,
+            magnifier: true,
             screenshot_area: d_screenshot_area(),
             notifications: d_notifications(),
             ask_where_to_save: None,
@@ -217,6 +223,8 @@ pub struct ShortcutsConfig {
     pub eyedropper: String,
     #[serde(default = "k_measurement")]
     pub measurement: String,
+    #[serde(default = "k_redact")]
+    pub redact: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -249,6 +257,8 @@ pub struct ToolbarConfig {
     pub eyedropper: bool,
     #[serde(default = "default_true")]
     pub measurement: bool,
+    #[serde(default = "default_true")]
+    pub redact: bool,
 }
 
 impl Default for ToolbarConfig {
@@ -268,16 +278,19 @@ impl Default for ToolbarConfig {
             step_marker: true,
             eyedropper: true,
             measurement: true,
+            redact: true,
         }
     }
 }
 
 impl ToolbarConfig {
-    /// Returns the list of visible button indices (0-23) based on which tools are enabled.
-    /// Tool buttons 0-13 are conditionally shown; colors 14-18 and actions 19-23 are always shown.
+    /// The toolbar buttons to show, as indices into `toolbar::BUTTONS`.
+    /// A tool's button follows its switch here; the colour swatches and
+    /// the actions are always shown.
     pub fn visible_button_indices(&self) -> Vec<usize> {
-        let mut indices = Vec::new();
+        use crate::overlay::toolbar::{ButtonAction, BUTTONS};
 
+        // In `tools::TOOL_ORDER`, like the first buttons of `BUTTONS`.
         let tool_flags = [
             self.select,
             self.arrow,
@@ -293,25 +306,17 @@ impl ToolbarConfig {
             self.step_marker,
             self.eyedropper,
             self.measurement,
+            self.redact,
         ];
-
-        for (i, &enabled) in tool_flags.iter().enumerate() {
-            if enabled {
-                indices.push(i);
-            }
-        }
-
-        // Colors: always visible (indices 14-18)
-        for i in 14..=18 {
-            indices.push(i);
-        }
-
-        // Actions: always visible (indices 19-23)
-        for i in 19..=23 {
-            indices.push(i);
-        }
-
-        indices
+        BUTTONS
+            .iter()
+            .enumerate()
+            .filter(|(i, button)| match button.action {
+                ButtonAction::Tool(_) => tool_flags.get(*i).copied().unwrap_or(true),
+                _ => true,
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// Ordered list of (symbol, label, enabled) for the Settings UI.
@@ -331,10 +336,11 @@ impl ToolbarConfig {
             ("1.", "Step Marker", self.step_marker),
             ("/|", "Eyedropper", self.eyedropper),
             ("|<>", "Measurement", self.measurement),
+            ("[#]", "Redact", self.redact),
         ]
     }
 
-    /// Toggle a tool by index (0-13).
+    /// Toggle a tool by index (`tools::TOOL_ORDER`).
     pub fn toggle_by_index(&mut self, index: usize) {
         match index {
             0 => self.select = !self.select,
@@ -351,6 +357,7 @@ impl ToolbarConfig {
             11 => self.step_marker = !self.step_marker,
             12 => self.eyedropper = !self.eyedropper,
             13 => self.measurement = !self.measurement,
+            14 => self.redact = !self.redact,
             _ => {}
         }
     }
@@ -373,6 +380,7 @@ impl Default for ShortcutsConfig {
             step_marker: "n".into(),
             eyedropper: "i".into(),
             measurement: "m".into(),
+            redact: "x".into(),
         }
     }
 }
@@ -395,10 +403,11 @@ impl ShortcutsConfig {
             ("1.", "Step Marker", &self.step_marker),
             ("/|", "Eyedropper", &self.eyedropper),
             ("|<>", "Measurement", &self.measurement),
+            ("[#]", "Redact", &self.redact),
         ]
     }
 
-    /// Set shortcut by index (0-13).
+    /// Set shortcut by index (`tools::TOOL_ORDER`).
     pub fn set_by_index(&mut self, index: usize, key: String) {
         match index {
             0 => self.select = key,
@@ -415,9 +424,26 @@ impl ShortcutsConfig {
             11 => self.step_marker = key,
             12 => self.eyedropper = key,
             13 => self.measurement = key,
+            14 => self.redact = key,
             _ => {}
         }
     }
+}
+
+/// Updating screen-mark from its releases (`update`). Nothing is fetched
+/// unless the user asks, or turns `auto_check` on.
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct UpdatesConfig {
+    /// Look for a newer release a minute after starting and once a day
+    /// after that, and say when there is one. It is never installed
+    /// without being asked.
+    #[serde(default)]
+    pub auto_check: bool,
+    /// Where releases come from, when not GitHub: a web folder
+    /// (`https://server/screen-mark/downloads`) or a folder path that holds
+    /// `latest.json`, its signature and the downloads.
+    #[serde(default)]
+    pub url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -432,6 +458,8 @@ pub struct Config {
     pub shortcuts: ShortcutsConfig,
     #[serde(default)]
     pub toolbar: ToolbarConfig,
+    #[serde(default)]
+    pub updates: UpdatesConfig,
 }
 
 impl Config {

@@ -2,17 +2,20 @@
 
 use std::num::NonZeroU32;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use winit::event::{ElementState, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{
+    ElementState, Ime, MouseButton as WinitMouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{CursorIcon, Window, WindowAttributes, WindowId, WindowLevel};
+use winit::keyboard::ModifiersState;
+use winit::window::{Window, WindowAttributes, WindowId, WindowLevel};
 
 use winit::application::ApplicationHandler;
 
+use screen_mark::access::Bridge;
 use screen_mark::capture;
 use screen_mark::cli::{Cli, Commands};
 use screen_mark::config::Config;
@@ -20,23 +23,21 @@ use screen_mark::countdown::Countdown;
 use screen_mark::display::{self, Monitor};
 use screen_mark::export;
 use screen_mark::geometry::{Color, Point};
-use screen_mark::history_ui::HistoryWindow;
+use screen_mark::history_ui::{HistoryWindow, Outcome as HistoryOutcome};
 use screen_mark::hotkey::{GlobalHotkeys, Status};
 use screen_mark::keys::{self, KeyId, KeyMap, KeyPress};
-use screen_mark::overlay::selection::{HitZone, Selection};
-use screen_mark::overlay::toolbar::{ButtonAction, Toolbar, BUTTONS};
-use screen_mark::pin::PinnedWindow;
-use screen_mark::renderer::render_overlay;
+use screen_mark::overlay::input::{KeyInput, Outcome as OverlayOutcome};
+use screen_mark::pin::{PinEvent, PinnedWindow};
+use screen_mark::renderer::{render_frame, to_window_pixels, Area, Frame};
 use screen_mark::settings_ui::{Outcome, SettingsView, SettingsWindow, Tab};
 use screen_mark::state::{AppState, OverlayState};
 use screen_mark::toast::{self, Click, Kind, Spec, Toast};
-use screen_mark::tools::{
-    annotation_bounding_box, apply_redo, apply_undo, hit_test_annotation, move_annotation,
-    recolor_annotation, record_undo, resize_annotation, Annotation, AnnotationTool, ResizeHandle,
-    ToolKind, UndoAction,
-};
 use screen_mark::tray::{self, TrayEvent, TrayHandle};
+use screen_mark::update::{self, Check, Release, Source, Version};
 use screen_mark::window_detect;
+
+/// A window's software-rendered surface.
+type Surface = softbuffer::Surface<Arc<Window>, Arc<Window>>;
 
 struct App {
     config: Config,
@@ -47,14 +48,27 @@ struct App {
     hotkey_rx: Receiver<global_hotkey::GlobalHotKeyEvent>,
     hotkey_wake: Arc<std::sync::OnceLock<EventLoopProxy<()>>>,
     overlay_window: Option<Arc<Window>>,
-    surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+    surface: Option<Surface>,
     pixmap: Option<tiny_skia::Pixmap>,
     modifiers: ModifiersState,
+    /// What the last overlay frame drew, so the next redraws only what
+    /// changed (see `renderer`).
+    frame: Frame,
+    /// The next frame goes to the window whole: its buffer doesn't hold
+    /// the last one, or the system asked for a repaint.
+    present_all: bool,
+    /// The size the window's buffer was last set to.
+    surface_size: (u32, u32),
+    /// Whether the overlay window is taking input-method (IME) text: on
+    /// only while a text annotation is being typed.
+    ime_on: bool,
     /// Modifier state tracked separately for the settings window (used while
     /// capturing a new global-hotkey combination).
     settings_modifiers: ModifiersState,
     /// When the Settings window lost focus (see `SETTINGS_BLUR_GRACE`).
     settings_blur_at: Option<Instant>,
+    /// Modifier state for the History window (Shift+Tab).
+    history_modifiers: ModifiersState,
     needs_redraw: bool,
     last_render: Instant,
     /// A capture waiting for something to leave the screen first (the
@@ -74,16 +88,96 @@ struct App {
     cli_only: bool,
     startup_notified: bool,
     countdown: Option<Countdown>,
-    window_capture_mode: bool,
-    window_rects: Vec<window_detect::WinRect>,
     /// Where the last region capture was on screen, for the last-region
     /// hotkey. Loaded at startup, saved whenever a region capture is used.
     last_region: Option<display::Rect>,
     settings_window: Option<SettingsWindow>,
     history_window: Option<HistoryWindow>,
+    /// What tells a screen reader about Settings and History (see
+    /// `access`). Each lives as long as its window and is dropped first.
+    settings_access: Option<Bridge>,
+    history_access: Option<Bridge>,
+    /// Where an update stands, shared with the threads that check and
+    /// install (see `update_clicked`).
+    update: Arc<Mutex<UpdateStatus>>,
+    /// What the tray's update item says now.
+    update_label: String,
+    /// When to look for a new release next (`[updates] auto_check`).
+    update_check_at: Option<Instant>,
+    /// The restart after an update has been done, or offered.
+    restart_handled: bool,
+    /// Quit was chosen once while an update was being installed.
+    quit_warned: bool,
+    /// The version this one replaced, when an update started it.
+    updated_from: Option<String>,
+}
+
+/// Where an update stands. The worker threads write it; the event loop
+/// reads it when a job finishes (`update_progress`).
+#[derive(Default)]
+struct UpdateStatus {
+    stage: UpdateStage,
+    /// A result to show, and whether the user asked for it. One they asked
+    /// for is shown whatever `notifications` says.
+    news: Option<(Spec, bool)>,
+}
+
+#[derive(Default, Clone)]
+enum UpdateStage {
+    /// Nothing is known: no check yet, or the last one found nothing.
+    #[default]
+    Unknown,
+    Checking,
+    /// A newer release, verified and ready to install.
+    Available(Release),
+    Installing(Version),
+    /// The new version is in place at this path; a restart runs it.
+    Installed(Version, std::path::PathBuf),
+}
+
+fn lock(status: &Mutex<UpdateStatus>) -> MutexGuard<'_, UpdateStatus> {
+    status
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Whether this copy of screen-mark can replace itself with a new version
+/// (not one a package manager owns, or a development build).
+fn installs_updates() -> bool {
+    update::running_copy().is_ok_and(|(_, kind)| kind.installs())
+}
+
+/// An error popup that shows the log file when clicked.
+fn failure_spec(title: &str, detail: String) -> Spec {
+    let spec = Spec::new(Kind::Error, title, detail);
+    match screen_mark::logging::log_path().filter(|p| p.is_file()) {
+        Some(log) => spec
+            .hint("Click to show the log")
+            .click(Click::ShowFile(log)),
+        None => spec,
+    }
+}
+
+/// `text` with its first letter capitalised: error texts are written to
+/// follow a colon.
+fn sentence(text: &str) -> String {
+    let mut letters = text.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().chain(letters).collect(),
+        None => String::new(),
+    }
 }
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(16); // ~60fps cap
+/// `[updates] auto_check`: the first look after starting, and how often
+/// after that.
+const FIRST_UPDATE_CHECK: Duration = Duration::from_secs(60);
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// On Windows the accessibility bridge has to be attached to a window
+/// before it is first shown, so Settings and History start hidden and are
+/// shown once their first frame is drawn.
+const ACCESS_NEEDS_HIDDEN_START: bool = cfg!(target_os = "windows");
 
 /// How long to wait after closing a popup before grabbing the screen, so
 /// the compositor has removed it.
@@ -96,31 +190,15 @@ const TRAY_MENU_CLOSE_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureKind {
-    /// Open the overlay to drag a region (or pick a window).
+    /// Open the overlay to drag a region.
     Region,
+    /// Open the overlay to click a window.
+    Window,
     /// One press: grab, save, copy.
     Screenshot,
     /// One press: grab the area of the last region capture again, save, copy.
     LastRegion,
 }
-
-/// Tool index (`ShortcutsConfig::entries()` order) to tool.
-const TOOL_KINDS: [ToolKind; 14] = [
-    ToolKind::Select,
-    ToolKind::Arrow,
-    ToolKind::Rectangle,
-    ToolKind::Circle,
-    ToolKind::RoundedRect,
-    ToolKind::Line,
-    ToolKind::Pencil,
-    ToolKind::Highlight,
-    ToolKind::Spotlight,
-    ToolKind::Text,
-    ToolKind::Pixelate,
-    ToolKind::StepMarker,
-    ToolKind::Eyedropper,
-    ToolKind::Measurement,
-];
 
 impl App {
     fn new(config: Config) -> Self {
@@ -157,8 +235,13 @@ impl App {
             surface: None,
             pixmap: None,
             modifiers: ModifiersState::empty(),
+            frame: Frame::default(),
+            present_all: true,
+            surface_size: (0, 0),
+            ime_on: false,
             settings_modifiers: ModifiersState::empty(),
             settings_blur_at: None,
+            history_modifiers: ModifiersState::empty(),
             needs_redraw: false,
             last_render: Instant::now(),
             capture_at: std::collections::VecDeque::new(),
@@ -174,11 +257,17 @@ impl App {
             cli_only: false,
             startup_notified: false,
             countdown: None,
-            window_capture_mode: false,
-            window_rects: Vec::new(),
             last_region: screen_mark::last_region::load(),
             settings_window: None,
             history_window: None,
+            settings_access: None,
+            history_access: None,
+            update: Arc::default(),
+            update_label: tray::UPDATE_LABEL.to_string(),
+            update_check_at: None,
+            restart_handled: false,
+            quit_warned: false,
+            updated_from: None,
         }
     }
 
@@ -282,12 +371,216 @@ impl App {
             std::thread::spawn(move || screen_mark::notify::system(&title, &body));
             return;
         }
+        self.popup(event_loop, spec, monitor);
+    }
+
+    /// Show a popup, whatever the `notifications` setting says.
+    fn popup(&mut self, event_loop: &ActiveEventLoop, spec: Spec, monitor: Option<Monitor>) {
         let monitor = monitor.or_else(pointer_monitor);
         // Replace any popup already up.
         self.toast = None;
         self.toast = Toast::show(event_loop, spec, monitor);
         if self.toast.is_none() {
             tracing::warn!("Could not create the popup window");
+        }
+    }
+
+    /// The tray's update item, or a click on an update popup: whatever
+    /// comes next.
+    fn update_clicked(&mut self, event_loop: &ActiveEventLoop) {
+        let stage = lock(&self.update).stage.clone();
+        match stage {
+            UpdateStage::Unknown => self.check_for_updates(true),
+            UpdateStage::Checking | UpdateStage::Installing(_) => {}
+            UpdateStage::Available(release) => self.install_update(event_loop, release),
+            UpdateStage::Installed(_, exe) => self.restart_into(event_loop, &exe),
+        }
+        self.update_progress(event_loop);
+    }
+
+    /// Look for a newer release, on a worker thread. `asked`: the user
+    /// clicked for it and gets an answer either way. A check nobody asked
+    /// for only speaks up when there is something new.
+    fn check_for_updates(&mut self, asked: bool) {
+        lock(&self.update).stage = UpdateStage::Checking;
+        let status = Arc::clone(&self.update);
+        let source = Source::from_setting(&self.config.updates.url);
+        self.spawn_job(None, move || {
+            let running = Version::running();
+            let (stage, news) = match update::check(&source, running, &update::keys::trusted()) {
+                Ok(Check::Available(release)) => {
+                    let version = release.version();
+                    tracing::info!("screen-mark {version} is available");
+                    let hint = if installs_updates() {
+                        "Click to install it, or use the tray menu"
+                    } else {
+                        "Click to see how to get it"
+                    };
+                    let mut spec = Spec::new(
+                        Kind::Info,
+                        format!("screen-mark {version} is available"),
+                        format!("You have {running}"),
+                    )
+                    .hint(hint)
+                    .click(Click::Update);
+                    spec.duration = Duration::from_secs(12);
+                    (UpdateStage::Available(release), Some(spec))
+                }
+                Ok(Check::UpToDate { latest }) => {
+                    tracing::info!("No update: the newest release is {latest}");
+                    let detail = if latest == running {
+                        format!("{running} is the newest version")
+                    } else {
+                        format!("You have {running}; the newest release is {latest}")
+                    };
+                    let spec = Spec::new(Kind::Success, "screen-mark is up to date", detail);
+                    (UpdateStage::Unknown, asked.then_some(spec))
+                }
+                Err(e) => {
+                    tracing::warn!("Couldn't check for updates: {e}");
+                    let spec = failure_spec("Couldn't check for updates", sentence(&e.to_string()));
+                    (UpdateStage::Unknown, asked.then_some(spec))
+                }
+            };
+            let mut status = lock(&status);
+            status.stage = stage;
+            status.news = news.map(|spec| (spec, asked));
+            None
+        });
+    }
+
+    /// Download `release` and put it in place, on a worker thread.
+    fn install_update(&mut self, event_loop: &ActiveEventLoop, release: Release) {
+        let version = release.version();
+        let (exe, kind) = match update::running_copy() {
+            Ok(found) => found,
+            Err(e) => {
+                return self.report_failure(event_loop, "Couldn't update", sentence(&e.to_string()))
+            }
+        };
+        if let Some(reason) = kind.reason() {
+            // Not a copy screen-mark replaces by itself: say why, and show
+            // where the release is unless a package manager brings it.
+            let title = format!("screen-mark {version} is available");
+            self.popup(
+                event_loop,
+                Spec::new(Kind::Info, title, sentence(&reason)),
+                None,
+            );
+            if !matches!(kind, update::Kind::Managed(_)) {
+                open_url(&release.page());
+            }
+            return;
+        }
+
+        lock(&self.update).stage = UpdateStage::Installing(version);
+        self.quit_warned = false;
+        let spec = Spec::new(
+            Kind::Info,
+            format!("Downloading screen-mark {version}"),
+            "screen-mark restarts when it is installed",
+        );
+        self.popup(event_loop, spec, None);
+        let status = Arc::clone(&self.update);
+        self.spawn_job(None, move || {
+            let result = update::install(&release, &exe, kind);
+            let mut status = lock(&status);
+            match result {
+                Ok(()) => {
+                    tracing::info!("screen-mark {version} is installed at {}", exe.display());
+                    status.stage = UpdateStage::Installed(version, exe);
+                }
+                Err(e) => {
+                    tracing::error!("The update to {version} failed: {e}");
+                    status.stage = UpdateStage::Available(release);
+                    let spec =
+                        failure_spec("The update wasn't installed", sentence(&e.to_string()));
+                    status.news = Some((spec, true));
+                }
+            }
+            None
+        });
+    }
+
+    /// Keep the tray's update item saying what a click on it does, show
+    /// what a finished check or install has to say, and restart once an
+    /// update is in place.
+    fn update_progress(&mut self, event_loop: &ActiveEventLoop) {
+        let (stage, news) = {
+            let mut status = lock(&self.update);
+            (status.stage.clone(), status.news.take())
+        };
+        let label = match &stage {
+            UpdateStage::Unknown => tray::UPDATE_LABEL.to_string(),
+            UpdateStage::Checking => "Checking for updates\u{2026}".to_string(),
+            UpdateStage::Available(release) if installs_updates() => {
+                format!("Install screen-mark {}", release.version())
+            }
+            UpdateStage::Available(release) => format!("Get screen-mark {}", release.version()),
+            UpdateStage::Installing(version) => format!("Installing screen-mark {version}\u{2026}"),
+            UpdateStage::Installed(version, _) => format!("Restart to use screen-mark {version}"),
+        };
+        if label != self.update_label {
+            if let Some(ref tray) = self.tray {
+                tray.set_update(&label);
+            }
+            self.update_label = label;
+        }
+
+        if let Some((mut spec, asked)) = news {
+            if asked {
+                self.popup(event_loop, spec, None);
+            } else {
+                // A system notification can't be clicked.
+                if self.config.notification_mode() == screen_mark::config::NotificationMode::System
+                {
+                    spec.hint = "It is in the tray menu".to_string();
+                }
+                self.feedback(event_loop, spec, None);
+            }
+        }
+
+        if let UpdateStage::Installed(version, exe) = stage {
+            if !self.restart_handled {
+                self.restart_handled = true;
+                let busy = self.overlay_window.is_some()
+                    || self.countdown.is_some()
+                    || !self.capture_at.is_empty()
+                    || !self.pinned_windows.is_empty()
+                    || self.settings_window.is_some()
+                    || self.history_window.is_some()
+                    || self.jobs_pending > 0;
+                if busy {
+                    // Not in the middle of a capture, and not with pins up.
+                    let spec = Spec::new(
+                        Kind::Success,
+                        format!("screen-mark {version} is installed"),
+                        "It takes over the next time screen-mark starts",
+                    )
+                    .hint("Click to restart now, or use the tray menu")
+                    .click(Click::Update);
+                    self.popup(event_loop, spec, None);
+                } else {
+                    self.restart_into(event_loop, &exe);
+                }
+            }
+        }
+    }
+
+    /// Start the version an update put at `exe`, and leave. The new one
+    /// waits for this one to be gone (`update::UPDATED_FROM`).
+    fn restart_into(&mut self, event_loop: &ActiveEventLoop, exe: &std::path::Path) {
+        tracing::info!("Restarting into {}", exe.display());
+        let started = std::process::Command::new(exe)
+            .env(update::UPDATED_FROM, Version::running().to_string())
+            .spawn();
+        match started {
+            Ok(_) => event_loop.exit(),
+            Err(e) => self.report_failure(
+                event_loop,
+                "Couldn't restart screen-mark",
+                format!("{e}. Quit and start it again to finish the update."),
+            ),
         }
     }
 
@@ -330,11 +623,7 @@ impl App {
         }
         let toast_up = self.toast.take().is_some();
         if delay.is_zero() && !toast_up && self.capture_at.is_empty() {
-            match kind {
-                CaptureKind::Region => self.trigger_capture(event_loop),
-                CaptureKind::Screenshot => self.do_screenshot(event_loop),
-                CaptureKind::LastRegion => self.do_last_region(event_loop),
-            }
+            self.run_capture(event_loop, kind);
             return;
         }
         // Queue behind captures already waiting, so a quick second press
@@ -350,6 +639,25 @@ impl App {
         self.capture_at.push_back((when, kind));
     }
 
+    /// Start the capture `kind` asks for, now.
+    fn run_capture(&mut self, event_loop: &ActiveEventLoop, kind: CaptureKind) {
+        match kind {
+            CaptureKind::Region => self.trigger_capture(event_loop, false),
+            CaptureKind::Window => self.trigger_capture(event_loop, true),
+            CaptureKind::Screenshot => self.do_screenshot(event_loop),
+            CaptureKind::LastRegion => self.do_last_region(event_loop),
+        }
+    }
+
+    /// Something went wrong outside a capture job. It is logged and shown
+    /// in a popup; the tray app has no console, so without the popup a
+    /// failed hotkey press looks like nothing happened. A click on the
+    /// popup shows the log file.
+    fn report_failure(&mut self, event_loop: &ActiveEventLoop, title: &str, detail: String) {
+        tracing::error!("{title}: {detail}");
+        self.feedback(event_loop, failure_spec(title, detail), None);
+    }
+
     /// Grab the whole virtual desktop. A failure is reported in a popup.
     fn grab_desktop(&mut self, event_loop: &ActiveEventLoop) -> Option<capture::CapturedScreen> {
         let shot = capture::create_capturer()
@@ -359,9 +667,7 @@ impl App {
         match shot {
             Ok(full) => Some(full),
             Err(e) => {
-                tracing::error!("Screenshot failed: {e}");
-                let spec = Spec::new(Kind::Error, "Couldn't capture the screen", e);
-                self.feedback(event_loop, spec, None);
+                self.report_failure(event_loop, "Couldn't capture the screen", e);
                 None
             }
         }
@@ -467,35 +773,16 @@ impl App {
         }
     }
 
-    fn trigger_capture(&mut self, event_loop: &ActiveEventLoop) {
+    /// Grab the desktop and open the overlay on it, in window-capture mode
+    /// if `pick_window`. A failure at any step is reported in a popup.
+    fn trigger_capture(&mut self, event_loop: &ActiveEventLoop, pick_window: bool) {
         if self.overlay_window.is_some() {
             tracing::info!("Overlay already open, ignoring capture trigger");
             return;
         }
-
-        let capturer = match capture::create_capturer() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to create capturer: {e}");
-                return;
-            }
-        };
-
-        let screens = match capturer.capture_all_screens() {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Screen capture failed: {e}");
-                return;
-            }
-        };
-
-        if screens.is_empty() {
-            tracing::error!("No screens captured");
+        let Some(screenshot) = self.grab_desktop(event_loop) else {
             return;
-        }
-
-        // Use the first (primary) screen
-        let screenshot = screens.into_iter().next().unwrap();
+        };
         tracing::info!(
             "Captured screen: {}x{} at ({}, {})",
             screenshot.width,
@@ -503,64 +790,50 @@ impl App {
             screenshot.x_offset,
             screenshot.y_offset
         );
+        // The windows on screen now, front to back. The overlay itself is
+        // not among them: it is created below, and is screen-mark's own.
+        let windows = pick_window.then(|| {
+            let rects = window_detect::enumerate_window_rects();
+            tracing::info!("Enumerated {} windows", rects.len());
+            rects
+        });
 
+        let (w, h) = (screenshot.width, screenshot.height);
         let attrs = WindowAttributes::default()
             .with_position(winit::dpi::PhysicalPosition::new(
                 screenshot.x_offset,
                 screenshot.y_offset,
             ))
-            .with_inner_size(winit::dpi::PhysicalSize::new(
-                screenshot.width,
-                screenshot.height,
-            ))
+            .with_inner_size(winit::dpi::PhysicalSize::new(w, h))
             .with_decorations(false)
             .with_visible(false)
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_title("screen-mark");
-
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
+        let opened = open_window(event_loop, attrs).and_then(|(window, surface)| {
+            let pixmap = tiny_skia::Pixmap::new(w, h)
+                .ok_or_else(|| format!("no memory for a {w} \u{00d7} {h} image"))?;
+            Ok((window, surface, pixmap))
+        });
+        let (window, surface, pixmap) = match opened {
+            Ok(parts) => parts,
             Err(e) => {
-                tracing::error!("Failed to create overlay window: {e}");
+                self.report_failure(event_loop, "Couldn't open the capture overlay", e);
                 return;
             }
         };
 
-        let context = match softbuffer::Context::new(Arc::clone(&window)) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to create softbuffer context: {e}");
-                return;
-            }
-        };
-
-        let surface = match softbuffer::Surface::new(&context, Arc::clone(&window)) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to create softbuffer surface: {e}");
-                return;
-            }
-        };
-
-        let pixmap = tiny_skia::Pixmap::new(screenshot.width, screenshot.height);
-        if pixmap.is_none() {
-            tracing::error!(
-                "Failed to create pixmap ({}x{})",
-                screenshot.width,
-                screenshot.height
-            );
-            return;
-        }
-
-        self.state = AppState::Capturing(Box::new(OverlayState::new(screenshot, &self.config)));
+        let mut overlay = OverlayState::new(screenshot, &self.config);
+        overlay.window_pick = windows;
+        self.state = AppState::Capturing(Box::new(overlay));
         self.surface = Some(surface);
-        self.pixmap = pixmap;
+        self.pixmap = Some(pixmap);
+        // A new pixmap and a new window buffer: nothing to build on yet.
+        self.frame = Frame::default();
+        self.present_all = true;
+        self.surface_size = (0, 0);
+        window.request_redraw();
         self.overlay_window = Some(window);
         self.needs_redraw = true;
-
-        if let Some(w) = &self.overlay_window {
-            w.request_redraw();
-        }
     }
 
     fn open_settings(&mut self, event_loop: &ActiveEventLoop, tab: Option<Tab>) {
@@ -573,72 +846,77 @@ impl App {
             return;
         }
 
-        let config = Config::load();
-
-        // Load window icon from embedded PNG
-        let win_icon = {
-            let icon_bytes = include_bytes!("../assets/icon.png");
-            let img = image::load_from_memory(icon_bytes)
-                .ok()
-                .map(|i| i.to_rgba8());
-            img.and_then(|i| {
-                let (w, h) = i.dimensions();
-                winit::window::Icon::from_rgba(i.into_raw(), w, h).ok()
-            })
-        };
-
-        let mut attrs = WindowAttributes::default()
+        let attrs = WindowAttributes::default()
             .with_title("screen-mark Settings")
             .with_inner_size(winit::dpi::LogicalSize::new(
                 screen_mark::settings_ui::WIN_W,
                 screen_mark::settings_ui::WIN_H,
             ))
             .with_resizable(false)
-            .with_decorations(true);
-
-        if let Some(icon) = win_icon {
-            attrs = attrs.with_window_icon(Some(icon));
-        }
-
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
+            .with_decorations(true)
+            .with_visible(!ACCESS_NEEDS_HIDDEN_START)
+            .with_window_icon(window_icon());
+        let (window, surface) = match open_window(event_loop, attrs) {
+            Ok(parts) => parts,
             Err(e) => {
-                tracing::error!("Failed to create settings window: {e}");
+                self.report_failure(event_loop, "Couldn't open Settings", e);
                 return;
             }
         };
-
-        let context = match softbuffer::Context::new(Arc::clone(&window)) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to create settings context: {e}");
-                return;
-            }
-        };
-
-        let surface = match softbuffer::Surface::new(&context, Arc::clone(&window)) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to create settings surface: {e}");
-                return;
-            }
-        };
+        self.settings_access = Some(Bridge::new(event_loop, &window, self.waker()));
 
         let statuses = KeyId::GLOBALS
             .into_iter()
             .map(|id| (id, self.hotkeys.status(id)))
             .collect();
-        let mut view = SettingsView::new(config, statuses);
+        let mut view = SettingsView::new(Config::load(), statuses);
         if let Some(t) = tab {
             view.open_tab(t);
         }
-        let mut sw = SettingsWindow::new(window, surface, view);
-        sw.render();
+        self.settings_window = Some(SettingsWindow::new(window, surface, view));
+        self.render_settings();
+        if let Some(sw) = &self.settings_window {
+            sw.window.set_visible(true);
+        }
         tracing::info!("Settings window opened");
-        self.settings_window = Some(sw);
+    }
+
+    /// Draw Settings and tell assistive technology what it shows now.
+    fn render_settings(&mut self) {
+        let Some(sw) = self.settings_window.as_mut() else {
+            return;
+        };
+        sw.render();
+        if let Some(access) = self.settings_access.as_mut() {
+            access.update(sw.view.snapshot(), sw.window.scale_factor());
+        }
+    }
+
+    /// Carry out what Settings asked for after an input.
+    fn settings_outcome(&mut self, event_loop: &ActiveEventLoop, outcome: Outcome) {
+        match outcome {
+            Outcome::Close { saved } => self.close_settings(event_loop, saved),
+            Outcome::Redraw => {
+                if let Some(ref sw) = self.settings_window {
+                    sw.window.request_redraw();
+                }
+            }
+            Outcome::Nothing => {}
+        }
+    }
+
+    /// A callback that wakes the event loop from any thread.
+    fn waker(&self) -> impl Fn() + Send + 'static {
+        let proxy = self.proxy.clone();
+        move || {
+            if let Some(proxy) = &proxy {
+                let _ = proxy.send_event(());
+            }
+        }
     }
 
     fn close_settings(&mut self, event_loop: &ActiveEventLoop, saved: bool) {
+        self.settings_access = None;
         self.settings_window = None;
         if saved {
             self.config = Config::load();
@@ -648,6 +926,13 @@ impl App {
                 // Resume first (no-op if not suspended), then apply the new keys.
                 self.hotkeys.resume();
                 self.apply_hotkeys(event_loop, false);
+                // The automatic update check may have been switched.
+                self.update_check_at = match self.config.updates.auto_check {
+                    true => self
+                        .update_check_at
+                        .or(Some(Instant::now() + FIRST_UPDATE_CHECK)),
+                    false => None,
+                };
             }
         } else {
             // Discard any live theme preview from the Settings toggle.
@@ -662,67 +947,71 @@ impl App {
     }
 
     fn open_history(&mut self, event_loop: &ActiveEventLoop) {
-        if self.history_window.is_some() {
-            tracing::info!("History window already open");
+        if let Some(ref hw) = self.history_window {
+            hw.window.focus_window();
             return;
         }
 
-        // Load window icon from embedded PNG
-        let win_icon = {
-            let icon_bytes = include_bytes!("../assets/icon.png");
-            let img = image::load_from_memory(icon_bytes)
-                .ok()
-                .map(|i| i.to_rgba8());
-            img.and_then(|i| {
-                let (w, h) = i.dimensions();
-                winit::window::Icon::from_rgba(i.into_raw(), w, h).ok()
-            })
-        };
-
-        let mut attrs = WindowAttributes::default()
+        let attrs = WindowAttributes::default()
             .with_title("screen-mark \u{2014} History")
             .with_inner_size(winit::dpi::LogicalSize::new(
                 screen_mark::history_ui::WIN_W,
                 screen_mark::history_ui::WIN_H,
             ))
             .with_resizable(false)
-            .with_decorations(true);
+            .with_decorations(true)
+            .with_visible(!ACCESS_NEEDS_HIDDEN_START)
+            .with_window_icon(window_icon());
+        let (window, surface) = match open_window(event_loop, attrs) {
+            Ok(parts) => parts,
+            Err(e) => {
+                self.report_failure(event_loop, "Couldn't open History", e);
+                return;
+            }
+        };
+        self.history_access = Some(Bridge::new(event_loop, &window, self.waker()));
 
-        if let Some(icon) = win_icon {
-            attrs = attrs.with_window_icon(Some(icon));
+        self.history_window = Some(HistoryWindow::new(window, surface));
+        self.render_history();
+        if let Some(hw) = &self.history_window {
+            hw.window.set_visible(true);
         }
-
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                tracing::error!("Failed to create history window: {e}");
-                return;
-            }
-        };
-
-        let context = match softbuffer::Context::new(Arc::clone(&window)) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to create history context: {e}");
-                return;
-            }
-        };
-
-        let surface = match softbuffer::Surface::new(&context, Arc::clone(&window)) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to create history surface: {e}");
-                return;
-            }
-        };
-
-        let mut hw = HistoryWindow::new(window, surface);
-        hw.render();
         tracing::info!("History window opened");
-        self.history_window = Some(hw);
+    }
+
+    /// Draw History and tell assistive technology what it shows now.
+    fn render_history(&mut self) {
+        let Some(hw) = self.history_window.as_mut() else {
+            return;
+        };
+        hw.render();
+        if let Some(access) = self.history_access.as_mut() {
+            access.update(hw.view.snapshot(), hw.window.scale_factor());
+        }
+    }
+
+    /// Carry out what History asked for after an input.
+    fn history_outcome(&mut self, outcome: HistoryOutcome) {
+        match outcome {
+            HistoryOutcome::Nothing => {}
+            HistoryOutcome::Close => self.close_history(),
+            HistoryOutcome::Redraw | HistoryOutcome::Copy(_) => {
+                if let Some(ref hw) = self.history_window {
+                    hw.window.request_redraw();
+                }
+            }
+        }
+        if let HistoryOutcome::Copy(path) = outcome {
+            // Decoded and copied off the UI thread, and reported like any
+            // other copy.
+            self.spawn_job(None, move || {
+                Some(screen_mark::history_ui::copy_capture(&path))
+            });
+        }
     }
 
     fn close_history(&mut self) {
+        self.history_access = None;
         self.history_window = None;
         tracing::info!("History window closed");
     }
@@ -733,8 +1022,9 @@ impl App {
         self.overlay_window = None;
         self.state = AppState::Idle;
         self.modifiers = ModifiersState::empty();
-        self.window_capture_mode = false;
-        self.window_rects.clear();
+        self.ime_on = false;
+        // A CJK font loaded for a text annotation is not needed any more.
+        screen_mark::font::release_fallbacks();
         tracing::info!("Overlay closed");
     }
 
@@ -973,12 +1263,7 @@ impl App {
                 Item::LastRegion => {
                     self.request_capture_in(event_loop, CaptureKind::LastRegion, menu_gone)
                 }
-                Item::Window => {
-                    self.window_capture_mode = true;
-                    self.window_rects = window_detect::enumerate_window_rects();
-                    tracing::info!("Enumerated {} windows", self.window_rects.len());
-                    self.request_capture_in(event_loop, CaptureKind::Region, menu_gone);
-                }
+                Item::Window => self.request_capture_in(event_loop, CaptureKind::Window, menu_gone),
                 Item::Delay(secs) => {
                     tracing::info!("Capturing in {secs} seconds...");
                     self.toast = None;
@@ -1004,10 +1289,11 @@ impl App {
                                 tray.set_autostart(new_state);
                             }
                         }
-                        Err(e) => tracing::error!("Auto-start toggle failed: {}", e),
+                        Err(e) => self.report_failure(event_loop, "Couldn't change auto-start", e),
                     }
                 }
                 Item::Settings => self.open_settings(event_loop, None),
+                Item::Update => self.update_clicked(event_loop),
                 Item::About => {
                     let version = env!("CARGO_PKG_VERSION");
                     let spec = Spec::new(
@@ -1019,6 +1305,20 @@ impl App {
                     open_url("https://github.com/Real-Fruit-Snacks/screen-mark");
                 }
                 Item::Quit => {
+                    // Between moving the old version aside and the new one
+                    // being in place there is no screen-mark.exe to start.
+                    // Say so once; a second Quit goes through.
+                    let installing = matches!(lock(&self.update).stage, UpdateStage::Installing(_));
+                    if installing && !self.quit_warned {
+                        self.quit_warned = true;
+                        let spec = Spec::new(
+                            Kind::Info,
+                            "An update is being installed",
+                            "Quitting now can leave it half done. Quit again to do it anyway.",
+                        );
+                        self.popup(event_loop, spec, None);
+                        continue;
+                    }
                     tracing::info!("Quit requested");
                     event_loop.exit();
                 }
@@ -1026,48 +1326,41 @@ impl App {
         }
     }
 
+    /// Draw the overlay and give the window what changed. Most frames
+    /// differ from the last one in a few small areas (the pointer moved),
+    /// so only those are drawn again, converted and copied to the screen;
+    /// a frame costs what changed, not the size of the desktop.
     fn render(&mut self) {
         if !self.needs_redraw {
             return;
         }
-
-        let overlay = match &mut self.state {
-            AppState::Capturing(o) => o,
-            AppState::Idle => return,
+        let AppState::Capturing(overlay) = &mut self.state else {
+            return;
+        };
+        let (Some(pixmap), Some(surface), Some(window)) = (
+            self.pixmap.as_mut(),
+            self.surface.as_mut(),
+            self.overlay_window.as_ref(),
+        ) else {
+            return;
         };
 
-        let pixmap = match self.pixmap.as_mut() {
-            Some(p) => p,
-            None => return,
-        };
-
-        let surface = match self.surface.as_mut() {
-            Some(s) => s,
-            None => return,
-        };
-
-        let window = match self.overlay_window.as_ref() {
-            Some(w) => w,
-            None => return,
-        };
-
-        render_overlay(overlay, pixmap);
+        let mut changed = render_frame(overlay, pixmap, &mut self.frame);
+        // The frame is ahead of the window from here on. If it can't be
+        // shown now, the next one that can is shown whole.
+        let show_all = std::mem::replace(&mut self.present_all, true);
 
         let size = window.inner_size();
-        let w = size.width;
-        let h = size.height;
-
-        if w == 0 || h == 0 {
+        let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else {
             return;
-        }
-
-        if let (Some(nz_w), Some(nz_h)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
-            if let Err(e) = surface.resize(nz_w, nz_h) {
+        };
+        if self.surface_size != (size.width, size.height) {
+            if let Err(e) = surface.resize(w, h) {
                 tracing::error!("Surface resize failed: {e}");
                 return;
             }
+            self.surface_size = (size.width, size.height);
         }
-
         let mut buffer = match surface.buffer_mut() {
             Ok(b) => b,
             Err(e) => {
@@ -1076,135 +1369,142 @@ impl App {
             }
         };
 
-        // Fast pixmap → softbuffer copy using raw bytes.
-        // Screenshot pixels are fully opaque (alpha=255), and tiny-skia composites
-        // onto an opaque background, so all pixels remain opaque after rendering.
-        // For opaque pixels, premultiplied == straight — skip demultiply entirely.
-        // Pixel format: tiny-skia RGBA bytes → softbuffer 0x00RRGGBB u32
-        let src_data = pixmap.data(); // &[u8], RGBA order
-        let pixel_count = (pixmap.width() * pixmap.height()) as usize;
-        let buf_len = buffer.len();
-        let copy_count = pixel_count.min(buf_len);
-
-        for (i, chunk) in src_data.chunks_exact(4).take(copy_count).enumerate() {
-            buffer[i] = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
+        // The window's buffer holds the last frame only if that frame was
+        // presented from it. The first frame goes whole, and so does any
+        // frame the system asked for (the window was uncovered or shown).
+        if show_all || buffer.age() != 1 {
+            changed = vec![Area::new(0, 0, size.width as i32, size.height as i32)];
         }
-
-        if let Err(e) = buffer.present() {
-            tracing::error!("Buffer present failed: {e}");
+        let told = to_window_pixels(pixmap, &mut buffer, size.width as usize, &changed);
+        if !told.is_empty() {
+            if let Err(e) = buffer.present_with_damage(&told) {
+                tracing::error!("Buffer present failed: {e}");
+                return;
+            }
         }
+        self.present_all = false;
 
         // Show window after first frame is rendered (avoids white flash)
-        if let Some(ref window) = self.overlay_window {
-            if !window.is_visible().unwrap_or(true) {
-                window.set_visible(true);
-            }
+        if !window.is_visible().unwrap_or(true) {
+            window.set_visible(true);
         }
 
         self.needs_redraw = false;
     }
-}
 
-/// Determine the appropriate cursor icon based on the current overlay state and mouse position.
-fn determine_cursor(overlay: &OverlayState, pos: Point) -> CursorIcon {
-    // Text input active — always show text cursor
-    if overlay.text_input_active {
-        return CursorIcon::Text;
-    }
-
-    // Check toolbar hover (only if selection exists)
-    if let Some(ref sel) = overlay.selection {
-        let visible_count = overlay.visible_buttons.len();
-        let toolbar =
-            Toolbar::position_for_dynamic(sel, overlay.screenshot.height as f32, visible_count);
-        if toolbar.hit_test_dynamic(pos, visible_count).is_some() {
-            return CursorIcon::Pointer;
-        }
-    }
-
-    // Currently dragging a resize handle on an annotation
-    if let Some(handle) = overlay.resize_handle {
-        return match handle {
-            ResizeHandle::TopLeft | ResizeHandle::BottomRight => CursorIcon::NwseResize,
-            ResizeHandle::TopRight | ResizeHandle::BottomLeft => CursorIcon::NeswResize,
-        };
-    }
-
-    // Hovering over a resize handle on a selected annotation
-    if overlay.active_tool == ToolKind::Select {
-        if let Some(idx) = overlay.selected_index {
-            if let Some(ann) = overlay.annotations.get(idx) {
-                if let Some((bx, by, bw, bh)) = annotation_bounding_box(ann) {
-                    let handles = [
-                        (Point::new(bx, by), ResizeHandle::TopLeft),
-                        (Point::new(bx + bw, by), ResizeHandle::TopRight),
-                        (Point::new(bx, by + bh), ResizeHandle::BottomLeft),
-                        (Point::new(bx + bw, by + bh), ResizeHandle::BottomRight),
-                    ];
-                    for (hp, handle) in &handles {
-                        if (pos.x - hp.x).abs() < 8.0 && (pos.y - hp.y).abs() < 8.0 {
-                            return match handle {
-                                ResizeHandle::TopLeft | ResizeHandle::BottomRight => {
-                                    CursorIcon::NwseResize
-                                }
-                                ResizeHandle::TopRight | ResizeHandle::BottomLeft => {
-                                    CursorIcon::NeswResize
-                                }
-                            };
-                        }
+    /// Carry out what the overlay asked for after an input (see
+    /// `overlay::input`, which holds the logic).
+    fn apply_outcome(&mut self, event_loop: &ActiveEventLoop, outcome: OverlayOutcome) {
+        match outcome {
+            OverlayOutcome::Nothing => {}
+            OverlayOutcome::Redraw => self.needs_redraw = true,
+            OverlayOutcome::Close => self.close_overlay(),
+            OverlayOutcome::Copy => self.do_copy(),
+            OverlayOutcome::Save => self.do_save(),
+            OverlayOutcome::Pin => self.do_pin(event_loop),
+            OverlayOutcome::Ocr => self.do_ocr(),
+            OverlayOutcome::Upload => self.do_upload(),
+            OverlayOutcome::PickColor(preset) => self.pick_color(preset),
+            OverlayOutcome::MovePointer(to) => {
+                // An arrow key moved the pointer by a pixel. Tell the
+                // overlay right away; the system's own move event follows.
+                if let Some(window) = &self.overlay_window {
+                    let at = winit::dpi::PhysicalPosition::new(to.x as f64, to.y as f64);
+                    if let Err(e) = window.set_cursor_position(at) {
+                        tracing::debug!("Couldn't move the pointer: {e}");
+                    }
+                }
+                if let AppState::Capturing(overlay) = &mut self.state {
+                    overlay.on_cursor_moved(to);
+                    self.needs_redraw = true;
+                }
+            }
+            OverlayOutcome::Paste => {
+                let text = arboard::Clipboard::new()
+                    .and_then(|mut clipboard| clipboard.get_text())
+                    .unwrap_or_default();
+                if let AppState::Capturing(overlay) = &mut self.state {
+                    if overlay.insert_text(&text) == OverlayOutcome::Redraw {
+                        self.needs_redraw = true;
                     }
                 }
             }
         }
+        self.sync_overlay_window();
     }
 
-    // Currently dragging to create selection
-    if overlay.is_selecting {
-        return CursorIcon::Crosshair;
-    }
-
-    // Currently dragging a resize/move zone
-    if let Some(zone) = overlay.drag_zone {
-        return hitzone_to_cursor(zone, overlay);
-    }
-
-    // Selection exists — hit-test it
-    if let Some(ref sel) = overlay.selection {
-        if let Some(zone) = sel.hit_test(pos, 8.0) {
-            return hitzone_to_cursor(zone, overlay);
+    /// Open the system colour picker, starting from a preset. The overlay
+    /// is hidden while the dialog is up: it is always-on-top and would
+    /// cover it.
+    fn pick_color(&mut self, preset: usize) {
+        let current = Color::presets()
+            .get(preset)
+            .copied()
+            .unwrap_or_else(Color::red);
+        if let Some(window) = &self.overlay_window {
+            window.set_visible(false);
+        }
+        let picked = screen_mark::color_picker::pick_color(&current);
+        if let Some(window) = &self.overlay_window {
+            window.set_visible(true);
+        }
+        if let (Some(color), AppState::Capturing(overlay)) = (picked, &mut self.state) {
+            overlay.apply_picked_color(color);
+            self.needs_redraw = true;
         }
     }
 
-    // No selection yet (idle) — crosshair
-    CursorIcon::Crosshair
+    /// Keep the overlay window in step with the overlay: its cursor,
+    /// whether it takes input-method text, and a redraw if one is due.
+    fn sync_overlay_window(&mut self) {
+        let (AppState::Capturing(overlay), Some(window)) = (&self.state, &self.overlay_window)
+        else {
+            return;
+        };
+        window.set_cursor(overlay.cursor_icon());
+        // An input method composes text only while a text annotation is
+        // being typed; the rest of the time keys are tool shortcuts.
+        let typing = overlay.text_input_active;
+        if typing != self.ime_on {
+            window.set_ime_allowed(typing);
+            self.ime_on = typing;
+        }
+        if let Some((x, y, height)) = overlay.text_caret_rect() {
+            // Where the input method puts its candidate list.
+            window.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(x as i32, y as i32),
+                winit::dpi::PhysicalSize::new(1u32, height.ceil().max(1.0) as u32),
+            );
+        }
+        // No `request_redraw` here: `about_to_wait` draws the frame, at most
+        // sixty times a second. A redraw request reaching the window is
+        // then always the system's, and gets the whole frame.
+    }
 }
 
-/// Map a HitZone to the appropriate cursor icon.
-fn hitzone_to_cursor(zone: HitZone, overlay: &OverlayState) -> CursorIcon {
-    match zone {
-        HitZone::TopLeft | HitZone::BottomRight => CursorIcon::NwseResize,
-        HitZone::TopRight | HitZone::BottomLeft => CursorIcon::NeswResize,
-        HitZone::Top | HitZone::Bottom => CursorIcon::NsResize,
-        HitZone::Left | HitZone::Right => CursorIcon::EwResize,
-        HitZone::Inside => {
-            // Inside selection — cursor depends on active tool
-            match overlay.active_tool {
-                ToolKind::Select => CursorIcon::Default,
-                ToolKind::Text => CursorIcon::Text,
-                ToolKind::StepMarker => CursorIcon::Cell,
-                ToolKind::Eyedropper => CursorIcon::Crosshair,
-                ToolKind::Arrow | ToolKind::Line | ToolKind::Pencil | ToolKind::Measurement => {
-                    CursorIcon::Crosshair
-                }
-                ToolKind::Rectangle
-                | ToolKind::RoundedRect
-                | ToolKind::Circle
-                | ToolKind::Highlight
-                | ToolKind::Pixelate
-                | ToolKind::Spotlight => CursorIcon::Crosshair,
-            }
-        }
-    }
+/// Create a window and the surface screen-mark draws it with.
+fn open_window(
+    event_loop: &ActiveEventLoop,
+    attrs: WindowAttributes,
+) -> Result<(Arc<Window>, Surface), String> {
+    let window = event_loop
+        .create_window(attrs)
+        .map(Arc::new)
+        .map_err(|e| format!("window: {e}"))?;
+    let context = softbuffer::Context::new(Arc::clone(&window))
+        .map_err(|e| format!("drawing context: {e}"))?;
+    let surface = softbuffer::Surface::new(&context, Arc::clone(&window))
+        .map_err(|e| format!("drawing surface: {e}"))?;
+    Ok((window, surface))
+}
+
+/// The app icon, for a window's title bar and taskbar button.
+fn window_icon() -> Option<winit::window::Icon> {
+    let image = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        .ok()?
+        .to_rgba8();
+    let (w, h) = image.dimensions();
+    winit::window::Icon::from_rgba(image.into_raw(), w, h).ok()
 }
 
 /// The monitor under the mouse pointer, if both can be read.
@@ -1255,12 +1555,25 @@ impl ApplicationHandler for App {
                 }
             }
             // Register hotkeys and say which ones are live (or which failed).
-            self.apply_hotkeys(event_loop, true);
+            // After an update, say that instead of "screen-mark is running".
+            let updated_from = self.updated_from.take();
+            self.apply_hotkeys(event_loop, updated_from.is_none());
+            if let (Some(old), true) = (updated_from, self.toast.is_none()) {
+                let spec = Spec::new(
+                    Kind::Success,
+                    format!("screen-mark {} is installed", Version::running()),
+                    format!("Updated from {old}"),
+                );
+                self.feedback(event_loop, spec, None);
+            }
+            if self.config.updates.auto_check {
+                self.update_check_at = Some(Instant::now() + FIRST_UPDATE_CHECK);
+            }
         }
 
         if self.immediate_capture {
             self.immediate_capture = false;
-            self.trigger_capture(event_loop);
+            self.trigger_capture(event_loop, false);
         }
     }
 
@@ -1280,73 +1593,91 @@ impl ApplicationHandler for App {
             .iter()
             .position(|p| p.window_id() == _window_id)
         {
-            if self.pinned_windows[pin_idx].handle_event(&event) {
-                // PinnedWindow::drop removes the backing temp file.
-                self.pinned_windows.remove(pin_idx);
-                tracing::info!("Pinned window closed");
+            match self.pinned_windows[pin_idx].handle_event(&event) {
+                PinEvent::Close => {
+                    // PinnedWindow::drop removes the backing temp file.
+                    self.pinned_windows.remove(pin_idx);
+                    tracing::info!("Pinned window closed");
+                }
+                PinEvent::Copy => {
+                    // Reported like any other copy, so the popup follows
+                    // the `notifications` setting.
+                    let (pixels, w, h) = self.pinned_windows[pin_idx].image();
+                    self.spawn_job(None, move || {
+                        let copied = export::copy_to_clipboard(&pixels, w, h);
+                        Some(screen_mark::actions::describe(None, Some(copied), w, h))
+                    });
+                }
+                PinEvent::Nothing => {}
             }
             return;
         }
 
         // Check if event is for the history window
-        if let Some(ref hw) = self.history_window {
-            if hw.window.id() == _window_id {
-                match event {
-                    WindowEvent::CloseRequested => {
-                        self.close_history();
-                        return;
+        if let Some(hw) = self
+            .history_window
+            .as_mut()
+            .filter(|hw| hw.window.id() == _window_id)
+        {
+            let outcome = match event {
+                WindowEvent::CloseRequested => HistoryOutcome::Close,
+                WindowEvent::RedrawRequested => {
+                    hw.render();
+                    if let Some(access) = self.history_access.as_mut() {
+                        access.update(hw.view.snapshot(), hw.window.scale_factor());
                     }
-                    WindowEvent::RedrawRequested => {
-                        if let Some(ref mut hw) = self.history_window {
-                            hw.render();
-                        }
-                        return;
-                    }
-                    WindowEvent::CursorMoved { position, .. } => {
-                        if let Some(ref mut hw) = self.history_window {
-                            if hw.on_cursor_moved(position.x as f32, position.y as f32) {
-                                hw.needs_redraw = true;
-                                hw.window.request_redraw();
-                            }
-                        }
-                        return;
-                    }
-                    WindowEvent::MouseInput {
-                        state: ElementState::Pressed,
-                        button: WinitMouseButton::Left,
-                        ..
-                    } => {
-                        if let Some(ref mut hw) = self.history_window {
-                            if hw.on_click() {
-                                hw.render();
-                            }
-                        }
-                        return;
-                    }
-                    WindowEvent::MouseWheel { delta, .. } => {
-                        let scroll = match delta {
-                            MouseScrollDelta::LineDelta(_, y) => y,
-                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
-                        };
-                        if let Some(ref mut hw) = self.history_window {
-                            if hw.on_scroll(scroll) {
-                                hw.window.request_redraw();
-                            }
-                        }
-                        return;
-                    }
-                    WindowEvent::KeyboardInput { ref event, .. }
-                        if event.state == ElementState::Pressed =>
-                    {
-                        if let Key::Named(NamedKey::Escape) = &event.logical_key {
-                            self.close_history();
-                            return;
-                        }
-                    }
-                    _ => {}
+                    HistoryOutcome::Nothing
                 }
-                return;
-            }
+                WindowEvent::CursorMoved { position, .. } => {
+                    if hw.on_cursor_moved(position.x as f32, position.y as f32) {
+                        HistoryOutcome::Redraw
+                    } else {
+                        HistoryOutcome::Nothing
+                    }
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: WinitMouseButton::Left,
+                    ..
+                } => hw.on_click(),
+                WindowEvent::MouseWheel { delta, .. } => {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => y,
+                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
+                    };
+                    if hw.view.scroll(lines) {
+                        HistoryOutcome::Redraw
+                    } else {
+                        HistoryOutcome::Nothing
+                    }
+                }
+                WindowEvent::ModifiersChanged(mods) => {
+                    self.history_modifiers = mods.state();
+                    HistoryOutcome::Nothing
+                }
+                WindowEvent::KeyboardInput { ref event, .. }
+                    if event.state == ElementState::Pressed =>
+                {
+                    let key = keys::key_from_winit(&event.logical_key, &event.physical_key);
+                    // A held Enter must not copy over and over.
+                    let presses = matches!(
+                        key,
+                        Some(keys::Key::Named(keys::Named::Enter | keys::Named::Space))
+                    );
+                    if event.repeat && presses {
+                        HistoryOutcome::Nothing
+                    } else {
+                        hw.view.key(KeyPress {
+                            mods: keys::mods_from_winit(self.history_modifiers),
+                            key,
+                            pressed: true,
+                        })
+                    }
+                }
+                _ => HistoryOutcome::Nothing,
+            };
+            self.history_outcome(outcome);
+            return;
         }
 
         // Check if event is for the popup
@@ -1372,6 +1703,7 @@ impl ApplicationHandler for App {
                                 Click::OpenKeySettings => {
                                     self.open_settings(_event_loop, Some(Tab::Keys))
                                 }
+                                Click::Update => self.update_clicked(_event_loop),
                                 Click::Nothing => {}
                             }
                         }
@@ -1389,9 +1721,7 @@ impl ApplicationHandler for App {
                 let outcome = match event {
                     WindowEvent::CloseRequested => Outcome::Close { saved: false },
                     WindowEvent::RedrawRequested => {
-                        if let Some(ref mut sw) = self.settings_window {
-                            sw.render();
-                        }
+                        self.render_settings();
                         Outcome::Nothing
                     }
                     WindowEvent::CursorMoved { position, .. } => {
@@ -1460,10 +1790,28 @@ impl ApplicationHandler for App {
                         } else {
                             keys::key_from_winit(&event.logical_key, &event.physical_key)
                         };
-                        // Skip auto-repeat and keys that can't be bound (media, IME, ...).
+                        // Skip keys that can't be bound (media, IME, ...) and
+                        // auto-repeat, except that a held Tab or arrow key
+                        // keeps moving through the controls.
                         let unbindable =
                             key.is_none() && !keys::is_modifier_key(&event.logical_key);
-                        if unbindable || event.repeat {
+                        let listening = self
+                            .settings_window
+                            .as_ref()
+                            .is_some_and(|sw| sw.view.editing().is_some());
+                        let moves_focus = matches!(
+                            key,
+                            Some(keys::Key::Named(
+                                keys::Named::Tab
+                                    | keys::Named::Up
+                                    | keys::Named::Down
+                                    | keys::Named::Left
+                                    | keys::Named::Right
+                                    | keys::Named::PageUp
+                                    | keys::Named::PageDown
+                            ))
+                        );
+                        if unbindable || (event.repeat && (listening || !moves_focus)) {
                             Outcome::Nothing
                         } else {
                             let press = KeyPress {
@@ -1479,15 +1827,7 @@ impl ApplicationHandler for App {
                     }
                     _ => Outcome::Nothing,
                 };
-                match outcome {
-                    Outcome::Close { saved } => self.close_settings(_event_loop, saved),
-                    Outcome::Redraw => {
-                        if let Some(ref sw) = self.settings_window {
-                            sw.window.request_redraw();
-                        }
-                    }
-                    Outcome::Nothing => {}
-                }
+                self.settings_outcome(_event_loop, outcome);
                 return;
             }
         }
@@ -1518,837 +1858,100 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Only process events when we're capturing
-        let overlay = match &mut self.state {
-            AppState::Capturing(o) => o,
-            AppState::Idle => return,
+        // What's left is the overlay, and only while capturing.
+        let AppState::Capturing(overlay) = &mut self.state else {
+            return;
         };
-
-        match event {
-            WindowEvent::CloseRequested => {
-                self.close_overlay();
-                return;
-            }
-
+        // Between two pointer moves little changes, and the frame is
+        // patched. After anything else (a click, a key, the wheel) it is
+        // drawn from scratch, so a patch that missed something could never
+        // outlive the next click.
+        let pointer_moved = matches!(event, WindowEvent::CursorMoved { .. });
+        let outcome = match event {
+            WindowEvent::CloseRequested => OverlayOutcome::Close,
             WindowEvent::RedrawRequested => {
+                // The system wants the window painted (it was shown or
+                // uncovered): all of it, not just what changed.
+                self.present_all = true;
                 self.needs_redraw = true;
                 self.render();
                 return;
             }
-
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
+                // Shift constrains a drag in progress.
+                overlay.set_modifiers(keys::mods_from_winit(self.modifiers))
             }
-
-            WindowEvent::KeyboardInput { event, .. } => {
-                if event.state != ElementState::Pressed {
-                    return;
-                }
-
-                // --- Text input guard: MUST be first ---
-                if overlay.text_input_active {
-                    let ctrl = self.modifiers.control_key();
-                    match &event.logical_key {
-                        Key::Character(ch) if ctrl && ch.as_str().eq_ignore_ascii_case("v") => {
-                            // Ctrl+V: paste clipboard text into the buffer
-                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                if let Ok(text) = clipboard.get_text() {
-                                    // Single-line annotation — fold newlines
-                                    let text = text.replace(['\r', '\n'], " ");
-                                    overlay.text_input_buffer.push_str(&text);
-                                    self.needs_redraw = true;
-                                }
-                            }
-                        }
-                        Key::Character(_) if ctrl => {
-                            // Swallow other Ctrl chords so they don't insert
-                            // literal characters while typing.
-                        }
-                        Key::Character(ch) => {
-                            overlay.text_input_buffer.push_str(ch.as_str());
-                            self.needs_redraw = true;
-                        }
-                        Key::Named(NamedKey::Space) => {
-                            overlay.text_input_buffer.push(' ');
-                            self.needs_redraw = true;
-                        }
-                        Key::Named(NamedKey::Backspace) => {
-                            overlay.text_input_buffer.pop();
-                            self.needs_redraw = true;
-                        }
-                        Key::Named(NamedKey::Enter) => {
-                            let buffer = overlay.text_input_buffer.clone();
-                            if let Some((idx, old_ann)) = overlay.text_edit_origin.take() {
-                                // Re-edit of an existing annotation: one Modify
-                                // step (or a Delete when the text was cleared).
-                                let idx = idx.min(overlay.annotations.len());
-                                if !buffer.is_empty() {
-                                    let ann = Annotation::Text {
-                                        position: overlay.text_input_position,
-                                        text: buffer,
-                                        color: overlay.current_color,
-                                        font_size: overlay.text_input_font_size,
-                                    };
-                                    overlay.annotations.insert(idx, ann);
-                                    record_undo(
-                                        &mut overlay.undo_stack,
-                                        &mut overlay.redo_stack,
-                                        UndoAction::Modify(idx, old_ann),
-                                    );
-                                } else {
-                                    record_undo(
-                                        &mut overlay.undo_stack,
-                                        &mut overlay.redo_stack,
-                                        UndoAction::Delete(idx, old_ann),
-                                    );
-                                }
-                            } else if !buffer.is_empty() {
-                                let ann = Annotation::Text {
-                                    position: overlay.text_input_position,
-                                    text: buffer,
-                                    color: overlay.current_color,
-                                    font_size: overlay.text_input_font_size,
-                                };
-                                overlay.annotations.push(ann);
-                                record_undo(
-                                    &mut overlay.undo_stack,
-                                    &mut overlay.redo_stack,
-                                    UndoAction::Add(overlay.annotations.len() - 1),
-                                );
-                            }
-                            overlay.text_input_buffer.clear();
-                            overlay.text_input_active = false;
-                            self.needs_redraw = true;
-                        }
-                        Key::Named(NamedKey::Escape) => {
-                            // Cancel text input; restore the original annotation
-                            // if this was a re-edit.
-                            if let Some((idx, old_ann)) = overlay.text_edit_origin.take() {
-                                let idx = idx.min(overlay.annotations.len());
-                                overlay.annotations.insert(idx, old_ann);
-                            }
-                            overlay.text_input_buffer.clear();
-                            overlay.text_input_active = false;
-                            self.needs_redraw = true;
-                        }
-                        _ => {
-                            // Ignore all other keys while typing
-                        }
-                    }
-                    // Return early — don't fall through to other handlers
-                    if self.needs_redraw {
-                        if let Some(w) = &self.overlay_window {
-                            w.request_redraw();
-                        }
-                    }
-                    return;
-                }
-
-                // The rebindable key map comes first, so a bound Ctrl+Enter or
-                // Ctrl+Delete runs its action; unbound Esc / Delete / Enter
-                // keep their fixed meaning below.
-                let has_selection = overlay.selection.is_some();
-                let mods = keys::mods_from_winit(self.modifiers);
-                let key = keys::key_from_winit(&event.logical_key, &event.physical_key);
-                let action = key.and_then(|k| self.keymap.editor_action(mods, k));
-                let tool = key.and_then(|k| self.keymap.tool(mods, k)).or_else(|| {
-                    // 2.0-style tool keys bound to a typed character.
-                    keys::typed_char(&event.logical_key)
-                        .and_then(|c| self.keymap.tool(mods, keys::Key::Typed(c)))
-                });
-                if let Some(action) = action {
-                    match action {
-                        KeyId::Copy => {
-                            self.do_copy();
-                            return;
-                        }
-                        KeyId::Save => {
-                            self.do_save();
-                            return;
-                        }
-                        KeyId::Pin => {
-                            self.do_pin(_event_loop);
-                            return;
-                        }
-                        KeyId::Ocr => {
-                            self.do_ocr();
-                            return;
-                        }
-                        KeyId::Upload => {
-                            self.do_upload();
-                            return;
-                        }
-                        KeyId::Undo | KeyId::Redo => {
-                            let overlay = match &mut self.state {
-                                AppState::Capturing(o) => o,
-                                _ => return,
-                            };
-                            let changed = if action == KeyId::Undo {
-                                apply_undo(
-                                    &mut overlay.annotations,
-                                    &mut overlay.undo_stack,
-                                    &mut overlay.redo_stack,
-                                )
-                            } else {
-                                apply_redo(
-                                    &mut overlay.annotations,
-                                    &mut overlay.undo_stack,
-                                    &mut overlay.redo_stack,
-                                )
-                            };
-                            if changed {
-                                overlay.selected_index = None;
-                                overlay.sync_step_counter();
-                                self.needs_redraw = true;
-                            }
-                        }
-                        KeyId::SelectAll => {
-                            let overlay = match &mut self.state {
-                                AppState::Capturing(o) => o,
-                                _ => return,
-                            };
-                            overlay.selection = Some(Selection {
-                                x: 0.0,
-                                y: 0.0,
-                                width: overlay.screenshot.width as f32,
-                                height: overlay.screenshot.height as f32,
-                            });
-                            self.needs_redraw = true;
-                        }
-                        _ => {}
-                    }
-                } else if let Some(i) = tool {
-                    if let Some(tool) = TOOL_KINDS.get(i).copied() {
-                        let overlay = match &mut self.state {
-                            AppState::Capturing(o) => o,
-                            _ => return,
-                        };
-                        overlay.active_tool = tool;
-                        overlay.selected_index = None;
-                        self.needs_redraw = true;
-                    }
-                } else {
-                    match &event.logical_key {
-                        Key::Named(NamedKey::Escape) => {
-                            let overlay = match &mut self.state {
-                                AppState::Capturing(o) => o,
-                                _ => return,
-                            };
-                            if overlay.selected_index.is_some() {
-                                overlay.selected_index = None;
-                                overlay.select_drag_start = None;
-                                self.needs_redraw = true;
-                            } else {
-                                self.close_overlay();
-                                return;
-                            }
-                        }
-                        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
-                            let overlay = match &mut self.state {
-                                AppState::Capturing(o) => o,
-                                _ => return,
-                            };
-                            if let Some(idx) = overlay.selected_index {
-                                if idx < overlay.annotations.len() {
-                                    let removed = overlay.annotations.remove(idx);
-                                    record_undo(
-                                        &mut overlay.undo_stack,
-                                        &mut overlay.redo_stack,
-                                        UndoAction::Delete(idx, removed),
-                                    );
-                                    overlay.selected_index = None;
-                                    overlay.sync_step_counter();
-                                    self.needs_redraw = true;
-                                }
-                            }
-                        }
-                        Key::Named(NamedKey::Enter) if has_selection => {
-                            // Quick copy — same path as Ctrl+C / the Copy button,
-                            // annotations included, clipboard work off-thread.
-                            self.do_copy();
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                let input = KeyInput::from_winit(
+                    &event.logical_key,
+                    &event.physical_key,
+                    keys::mods_from_winit(self.modifiers),
+                );
+                overlay.on_key(&input, &self.keymap)
             }
-
+            // Text from an input method (IME), while a text annotation is
+            // being typed: what is being composed, then the final text.
+            WindowEvent::Ime(Ime::Preedit(text, _)) => overlay.set_preedit(&text),
+            WindowEvent::Ime(Ime::Commit(text)) => overlay.insert_text(&text),
             WindowEvent::CursorMoved { position, .. } => {
-                let pos = Point::new(position.x as f32, position.y as f32);
-                let prev = overlay.last_mouse_pos;
-                overlay.last_mouse_pos = pos;
-                let dx = pos.x - prev.x;
-                let dy = pos.y - prev.y;
-
-                // Window capture mode: highlight the window under the cursor
-                if self.window_capture_mode {
-                    let x_off = overlay.screenshot.x_offset;
-                    let y_off = overlay.screenshot.y_offset;
-                    let screen_x = pos.x as i32 + x_off;
-                    let screen_y = pos.y as i32 + y_off;
-
-                    if let Some((wx, wy, ww, wh)) =
-                        window_detect::window_at_point(&self.window_rects, screen_x, screen_y)
-                    {
-                        let sel_x = (wx - x_off) as f32;
-                        let sel_y = (wy - y_off) as f32;
-                        overlay.selection = Some(Selection {
-                            x: sel_x,
-                            y: sel_y,
-                            width: ww as f32,
-                            height: wh as f32,
-                        });
-                    } else {
-                        overlay.selection = None;
-                    }
-                    self.needs_redraw = true;
-
-                    // Update cursor
-                    if let Some(ref window) = self.overlay_window {
-                        window.set_cursor(CursorIcon::Crosshair);
-                    }
-                    return;
-                }
-
-                if overlay.is_selecting {
-                    // Update selection while dragging
-                    if let Some(start) = overlay.drag_start {
-                        overlay.selection = Some(Selection::from_points(start, pos));
-                        self.needs_redraw = true;
-                    }
-                } else if let Some(zone) = overlay.drag_zone {
-                    // Resizing or moving selection
-                    if let Some(ref mut sel) = overlay.selection {
-                        if zone == HitZone::Inside {
-                            sel.move_by(dx, dy);
-                        } else {
-                            sel.resize(zone, dx, dy);
-                        }
-                        self.needs_redraw = true;
-                    }
-                } else {
-                    // Forward to active tool if drawing
-                    match overlay.active_tool {
-                        ToolKind::Select => {
-                            // Resize drag takes priority
-                            if let (Some(idx), Some(handle)) =
-                                (overlay.selected_index, overlay.resize_handle)
-                            {
-                                if let Some(ann) = overlay.annotations.get_mut(idx) {
-                                    resize_annotation(ann, handle, pos);
-                                }
-                                self.needs_redraw = true;
-                            } else if let (Some(idx), Some(drag_start)) =
-                                (overlay.selected_index, overlay.select_drag_start)
-                            {
-                                let dx = pos.x - drag_start.x;
-                                let dy = pos.y - drag_start.y;
-                                if let Some(ann) = overlay.annotations.get_mut(idx) {
-                                    move_annotation(ann, dx, dy);
-                                }
-                                overlay.select_drag_start = Some(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Arrow => {
-                            if overlay.arrow_tool.is_drawing() {
-                                overlay.arrow_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Rectangle => {
-                            if overlay.rectangle_tool.is_drawing() {
-                                overlay.rectangle_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::RoundedRect => {
-                            if overlay.rounded_rect_tool.is_drawing() {
-                                overlay.rounded_rect_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Circle => {
-                            if overlay.circle_tool.is_drawing() {
-                                overlay.circle_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Line => {
-                            if overlay.line_tool.is_drawing() {
-                                overlay.line_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Measurement => {
-                            if overlay.measurement_tool.is_drawing() {
-                                overlay.measurement_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Pencil => {
-                            if overlay.pencil_tool.is_drawing() {
-                                overlay.pencil_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Highlight => {
-                            if overlay.highlight_tool.is_drawing() {
-                                overlay.highlight_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Spotlight => {
-                            if overlay.spotlight_tool.is_drawing() {
-                                overlay.spotlight_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::Text => {
-                            // Text tool does not use mouse move
-                            overlay.text_tool.on_mouse_move(pos);
-                        }
-                        ToolKind::Pixelate => {
-                            if overlay.pixelate_tool.is_drawing() {
-                                overlay.pixelate_tool.on_mouse_move(pos);
-                                self.needs_redraw = true;
-                            }
-                        }
-                        ToolKind::StepMarker => {
-                            overlay.step_marker_tool.on_mouse_move(pos);
-                        }
-                        ToolKind::Eyedropper => {
-                            // Read color from screenshot pixels at cursor position
-                            let px = pos.x as u32;
-                            let py = pos.y as u32;
-                            if px < overlay.screenshot.width && py < overlay.screenshot.height {
-                                let idx = ((py * overlay.screenshot.width + px) * 4) as usize;
-                                if idx + 3 < overlay.screenshot.pixels.len() {
-                                    let r = overlay.screenshot.pixels[idx] as f32 / 255.0;
-                                    let g = overlay.screenshot.pixels[idx + 1] as f32 / 255.0;
-                                    let b = overlay.screenshot.pixels[idx + 2] as f32 / 255.0;
-                                    overlay.eyedropper_preview = Some(Color::new(r, g, b, 1.0));
-                                }
-                            }
-                            self.needs_redraw = true;
-                        }
-                    }
-                }
-
-                // Update cursor icon based on current state
-                if let Some(ref window) = self.overlay_window {
-                    let cursor = determine_cursor(overlay, pos);
-                    window.set_cursor(cursor);
-                }
-
-                // Always redraw on mouse move for tooltips and cursor feedback
-                // (60fps cap prevents this from being wasteful)
-                self.needs_redraw = true;
+                overlay.on_cursor_moved(Point::new(position.x as f32, position.y as f32))
             }
-
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: WinitMouseButton::Left,
                 ..
-            } => {
-                // Window capture mode: click confirms the highlighted window
-                if self.window_capture_mode {
-                    // Selection is already set to the window under cursor
-                    self.window_capture_mode = false;
-                    self.window_rects.clear();
-                    self.needs_redraw = true;
-                    tracing::info!("Window captured");
-                    if overlay.selection.is_some() && self.config.general.finish_on_release {
-                        self.do_copy();
-                    }
-                    return;
-                }
-
-                let pos = overlay.last_mouse_pos;
-
-                // 1. Check toolbar hit first (only if selection exists)
-                if let Some(ref sel) = overlay.selection {
-                    let visible_count = overlay.visible_buttons.len();
-                    let toolbar = Toolbar::position_for_dynamic(
-                        sel,
-                        overlay.screenshot.height as f32,
-                        visible_count,
-                    );
-                    if let Some(vis_idx) = toolbar.hit_test_dynamic(pos, visible_count) {
-                        let btn = overlay.visible_buttons[vis_idx];
-                        let action = BUTTONS.get(btn).map(|d| d.action);
-                        // Reset upload confirmation if clicking anything other than Upload
-                        if action != Some(ButtonAction::Upload) {
-                            overlay.upload_confirmed = false;
-                        }
-                        match action {
-                            Some(ButtonAction::Tool(kind)) => {
-                                overlay.active_tool = kind;
-                                if kind != ToolKind::Select {
-                                    overlay.selected_index = None;
-                                }
-                                self.needs_redraw = true;
-                            }
-                            Some(ButtonAction::Color(idx)) => {
-                                let presets = Color::presets();
-                                if idx < presets.len() {
-                                    // If an annotation is selected, recolor it
-                                    if let Some(sel_idx) = overlay.selected_index {
-                                        if sel_idx < overlay.annotations.len() {
-                                            let old_ann = overlay.annotations[sel_idx].clone();
-                                            recolor_annotation(
-                                                &mut overlay.annotations[sel_idx],
-                                                presets[idx],
-                                            );
-                                            record_undo(
-                                                &mut overlay.undo_stack,
-                                                &mut overlay.redo_stack,
-                                                UndoAction::Modify(sel_idx, old_ann),
-                                            );
-                                        }
-                                    } else {
-                                        overlay.set_color_all(presets[idx]);
-                                    }
-                                    self.needs_redraw = true;
-                                }
-                            }
-                            Some(ButtonAction::Ocr) => {
-                                self.do_ocr();
-                                return;
-                            }
-                            Some(ButtonAction::Upload) => {
-                                self.do_upload();
-                                return;
-                            }
-                            Some(ButtonAction::Pin) => {
-                                self.do_pin(_event_loop);
-                                return;
-                            }
-                            Some(ButtonAction::Copy) => {
-                                self.do_copy();
-                                return;
-                            }
-                            Some(ButtonAction::Save) => {
-                                self.do_save();
-                                return;
-                            }
-                            None => {}
-                        }
-                        return;
-                    }
-                }
-
-                // 2. No selection yet — start selecting
-                if overlay.selection.is_none() {
-                    overlay.is_selecting = true;
-                    overlay.drag_start = Some(pos);
-                    return;
-                }
-
-                // 3. Selection exists — hit-test it
-                if let Some(ref sel) = overlay.selection {
-                    match sel.hit_test(pos, 8.0) {
-                        Some(HitZone::Inside) => {
-                            // Start annotation with active tool
-                            match overlay.active_tool {
-                                ToolKind::Select => {
-                                    // Check resize handles first (if an annotation is selected)
-                                    if let Some(idx) = overlay.selected_index {
-                                        if let Some(ann) = overlay.annotations.get(idx) {
-                                            if let Some((bx, by, bw, bh)) =
-                                                annotation_bounding_box(ann)
-                                            {
-                                                let handles = [
-                                                    (Point::new(bx, by), ResizeHandle::TopLeft),
-                                                    (
-                                                        Point::new(bx + bw, by),
-                                                        ResizeHandle::TopRight,
-                                                    ),
-                                                    (
-                                                        Point::new(bx, by + bh),
-                                                        ResizeHandle::BottomLeft,
-                                                    ),
-                                                    (
-                                                        Point::new(bx + bw, by + bh),
-                                                        ResizeHandle::BottomRight,
-                                                    ),
-                                                ];
-                                                for (hp, handle) in &handles {
-                                                    if (pos.x - hp.x).abs() < 8.0
-                                                        && (pos.y - hp.y).abs() < 8.0
-                                                    {
-                                                        overlay.resize_handle = Some(*handle);
-                                                        // Snapshot annotation before resize for undo
-                                                        overlay.pre_drag_annotation = Some((
-                                                            idx,
-                                                            overlay.annotations[idx].clone(),
-                                                        ));
-                                                        self.needs_redraw = true;
-                                                        return;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Check annotations in REVERSE order (top-most first)
-                                    let mut found = None;
-                                    for (idx, ann) in overlay.annotations.iter().enumerate().rev() {
-                                        if hit_test_annotation(ann, &pos, 8.0) {
-                                            found = Some(idx);
-                                            break;
-                                        }
-                                    }
-                                    if let Some(idx) = found {
-                                        // If clicking an already-selected Text annotation, re-enter edit mode
-                                        if overlay.selected_index == Some(idx) {
-                                            if let Some(Annotation::Text {
-                                                position,
-                                                text,
-                                                color,
-                                                font_size,
-                                            }) = overlay.annotations.get(idx).cloned()
-                                            {
-                                                // Take the annotation out and remember it: committing
-                                                // records ONE Modify undo step; Escape restores it.
-                                                let removed = overlay.annotations.remove(idx);
-                                                overlay.text_edit_origin = Some((idx, removed));
-                                                overlay.selected_index = None;
-                                                overlay.text_input_active = true;
-                                                overlay.text_input_position = position;
-                                                overlay.text_input_buffer = text;
-                                                overlay.text_input_font_size = font_size;
-                                                overlay.current_color = color;
-                                                self.needs_redraw = true;
-                                                return;
-                                            }
-                                        }
-                                        overlay.selected_index = Some(idx);
-                                        overlay.select_drag_start = Some(pos);
-                                        // Snapshot annotation before move for undo
-                                        overlay.pre_drag_annotation =
-                                            Some((idx, overlay.annotations[idx].clone()));
-                                    } else {
-                                        overlay.selected_index = None;
-                                    }
-                                }
-                                ToolKind::Arrow => overlay.arrow_tool.on_mouse_down(pos),
-                                ToolKind::Rectangle => overlay.rectangle_tool.on_mouse_down(pos),
-                                ToolKind::RoundedRect => {
-                                    overlay.rounded_rect_tool.on_mouse_down(pos)
-                                }
-                                ToolKind::Circle => overlay.circle_tool.on_mouse_down(pos),
-                                ToolKind::Line => overlay.line_tool.on_mouse_down(pos),
-                                ToolKind::Measurement => {
-                                    overlay.measurement_tool.on_mouse_down(pos)
-                                }
-                                ToolKind::Pencil => overlay.pencil_tool.on_mouse_down(pos),
-                                ToolKind::Highlight => overlay.highlight_tool.on_mouse_down(pos),
-                                ToolKind::Text => {
-                                    overlay.text_tool.on_mouse_down(pos);
-                                    if let Some(p) = overlay.text_tool.take_pending_position() {
-                                        overlay.text_input_active = true;
-                                        overlay.text_input_position = p;
-                                        overlay.text_input_buffer.clear();
-                                        overlay.text_input_font_size =
-                                            overlay.text_tool.font_size();
-                                    }
-                                }
-                                ToolKind::Pixelate => overlay.pixelate_tool.on_mouse_down(pos),
-                                ToolKind::StepMarker => overlay.step_marker_tool.on_mouse_down(pos),
-                                ToolKind::Spotlight => overlay.spotlight_tool.on_mouse_down(pos),
-                                ToolKind::Eyedropper => {
-                                    if let Some(color) = overlay.eyedropper_preview {
-                                        overlay.set_color_all(color);
-                                        overlay.active_tool = ToolKind::Arrow;
-                                    }
-                                }
-                            }
-                            self.needs_redraw = true;
-                        }
-                        Some(zone) => {
-                            // Start resize
-                            overlay.drag_zone = Some(zone);
-                        }
-                        None => {
-                            // Outside selection — clear and start new
-                            overlay.selection = None;
-                            overlay.is_selecting = true;
-                            overlay.drag_start = Some(pos);
-                            self.needs_redraw = true;
-                        }
-                    }
-                }
-            }
-
+            } => overlay.on_mouse_down(),
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: WinitMouseButton::Left,
                 ..
-            } => {
-                let pos = overlay.last_mouse_pos;
-
-                if overlay.is_selecting {
-                    overlay.is_selecting = false;
-                    // Finalize selection — ensure minimum size
-                    let mut drawn = false;
-                    if let Some(start) = overlay.drag_start.take() {
-                        let sel = Selection::from_points(start, pos);
-                        if sel.width > 2.0 && sel.height > 2.0 {
-                            overlay.selection = Some(sel);
-                            drawn = true;
-                        }
-                    }
-                    self.needs_redraw = true;
-                    if drawn && self.config.general.finish_on_release {
-                        // "Copy as soon as a region is drawn": skip markup.
-                        self.do_copy();
-                        return;
-                    }
-                } else if overlay.drag_zone.is_some() {
-                    overlay.drag_zone = None;
-                } else {
-                    // Finalize annotation
-                    let annotation = match overlay.active_tool {
-                        ToolKind::Select => {
-                            // Record undo for move/resize if annotation changed
-                            if let Some((idx, old_ann)) = overlay.pre_drag_annotation.take() {
-                                if idx < overlay.annotations.len()
-                                    && overlay.annotations[idx] != old_ann
-                                {
-                                    record_undo(
-                                        &mut overlay.undo_stack,
-                                        &mut overlay.redo_stack,
-                                        UndoAction::Modify(idx, old_ann),
-                                    );
-                                }
-                            }
-                            overlay.select_drag_start = None;
-                            overlay.resize_handle = None;
-                            None
-                        }
-                        ToolKind::Arrow => overlay.arrow_tool.on_mouse_up(pos),
-                        ToolKind::Rectangle => overlay.rectangle_tool.on_mouse_up(pos),
-                        ToolKind::RoundedRect => overlay.rounded_rect_tool.on_mouse_up(pos),
-                        ToolKind::Circle => overlay.circle_tool.on_mouse_up(pos),
-                        ToolKind::Line => overlay.line_tool.on_mouse_up(pos),
-                        ToolKind::Measurement => overlay.measurement_tool.on_mouse_up(pos),
-                        ToolKind::Pencil => overlay.pencil_tool.on_mouse_up(pos),
-                        ToolKind::Highlight => overlay.highlight_tool.on_mouse_up(pos),
-                        ToolKind::Text => overlay.text_tool.on_mouse_up(pos),
-                        ToolKind::Pixelate => overlay.pixelate_tool.on_mouse_up(pos),
-                        ToolKind::StepMarker => overlay.step_marker_tool.on_mouse_up(pos),
-                        ToolKind::Spotlight => overlay.spotlight_tool.on_mouse_up(pos),
-                        ToolKind::Eyedropper => None,
-                    };
-                    if let Some(ann) = annotation {
-                        overlay.annotations.push(ann);
-                        record_undo(
-                            &mut overlay.undo_stack,
-                            &mut overlay.redo_stack,
-                            UndoAction::Add(overlay.annotations.len() - 1),
-                        );
-                        self.needs_redraw = true;
-                    }
-                }
-            }
-
-            // Right-click: color picker on swatch, otherwise close overlay
+            } => overlay.on_mouse_up(),
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: WinitMouseButton::Right,
                 ..
-            } => {
-                if let AppState::Capturing(ref mut overlay) = self.state {
-                    if let Some(ref sel) = overlay.selection {
-                        let visible_count = overlay.visible_buttons.len();
-                        let toolbar = Toolbar::position_for_dynamic(
-                            sel,
-                            overlay.screenshot.height as f32,
-                            visible_count,
-                        );
-                        let pos = overlay.last_mouse_pos;
-                        if let Some(vis_idx) = toolbar.hit_test_dynamic(pos, visible_count) {
-                            let btn = overlay.visible_buttons[vis_idx];
-                            if let Some(ButtonAction::Color(swatch_idx)) =
-                                BUTTONS.get(btn).map(|d| d.action)
-                            {
-                                let current = Color::presets()
-                                    .get(swatch_idx)
-                                    .copied()
-                                    .unwrap_or_else(Color::red);
-                                if let Some(ref w) = self.overlay_window {
-                                    w.set_visible(false);
-                                }
-                                let picked = screen_mark::color_picker::pick_color(&current);
-                                if let Some(ref w) = self.overlay_window {
-                                    w.set_visible(true);
-                                }
-                                if let Some(new_color) = picked {
-                                    overlay.set_color_all(new_color);
-                                    if let Some(idx) = overlay.selected_index {
-                                        if idx < overlay.annotations.len() {
-                                            let old_ann = overlay.annotations[idx].clone();
-                                            recolor_annotation(
-                                                &mut overlay.annotations[idx],
-                                                new_color,
-                                            );
-                                            record_undo(
-                                                &mut overlay.undo_stack,
-                                                &mut overlay.redo_stack,
-                                                UndoAction::Modify(idx, old_ann),
-                                            );
-                                        }
-                                    }
-                                    self.needs_redraw = true;
-                                }
-                                return;
-                            }
-                        }
-                    }
-                }
-                if let AppState::Capturing(ref overlay) = self.state {
-                    if overlay.selection.is_some() {
-                        return;
-                    }
-                }
-                self.close_overlay();
-                return;
-            }
-
-            WindowEvent::MouseWheel { delta, .. } => {
-                let scroll = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
-                };
-                if overlay.text_input_active {
-                    // Adjust font size while typing
-                    overlay.text_input_font_size =
-                        (overlay.text_input_font_size + scroll).clamp(10.0, 72.0);
-                } else if overlay.active_tool == ToolKind::StepMarker {
-                    let new_size = overlay.step_marker_tool.size() + scroll * 2.0;
-                    overlay.step_marker_tool.set_size(new_size);
-                } else if overlay.active_tool == ToolKind::RoundedRect {
-                    let new_radius = overlay.rounded_rect_tool.radius() + scroll * 2.0;
-                    overlay.rounded_rect_tool.set_radius(new_radius);
-                } else {
-                    overlay.set_thickness_all(overlay.current_thickness + scroll);
-                }
-                self.needs_redraw = true;
-            }
-
-            _ => {}
+            } => overlay.on_right_click(),
+            WindowEvent::MouseWheel { delta, .. } => overlay.on_scroll(match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
+            }),
+            _ => return,
+        };
+        if !pointer_moved {
+            self.frame.invalidate();
         }
-
-        if self.needs_redraw {
-            if let Some(w) = &self.overlay_window {
-                w.request_redraw();
-            }
-        }
+        self.apply_outcome(_event_loop, outcome);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.process_tray_events(event_loop);
+
+        // What a screen reader asked Settings or History to do.
+        let asked = self
+            .settings_access
+            .as_mut()
+            .map(|access| access.requests())
+            .unwrap_or_default();
+        for request in asked {
+            let Some(sw) = self.settings_window.as_mut() else {
+                break;
+            };
+            let outcome = sw.view.request(request);
+            self.settings_outcome(event_loop, outcome);
+        }
+        let asked = self
+            .history_access
+            .as_mut()
+            .map(|access| access.requests())
+            .unwrap_or_default();
+        for request in asked {
+            let Some(hw) = self.history_window.as_mut() else {
+                break;
+            };
+            let outcome = hw.view.request(request);
+            self.history_outcome(outcome);
+        }
 
         // Settings lost focus while listening: stop, so the hotkeys work again.
         let mut blur_deadline = None;
@@ -2399,12 +2002,18 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Results from capture workers.
+        // Results from worker threads.
+        let mut finished = false;
         while let Ok((spec, monitor)) = self.jobs_rx.try_recv() {
             self.jobs_pending = self.jobs_pending.saturating_sub(1);
+            finished = true;
             if let Some(spec) = spec {
                 self.feedback(event_loop, spec, monitor);
             }
+        }
+        if finished {
+            // It may have been an update check or install.
+            self.update_progress(event_loop);
         }
 
         // Apply async folder-picker results for the settings window.
@@ -2420,6 +2029,19 @@ impl ApplicationHandler for App {
         };
         if let Some(t) = blur_deadline {
             wake_at(t);
+        }
+
+        // `[updates] auto_check`: look for a new release now and then.
+        if let Some(when) = self.update_check_at {
+            let now = Instant::now();
+            if now < when {
+                wake_at(when);
+            } else {
+                self.update_check_at = Some(now + UPDATE_CHECK_EVERY);
+                if matches!(lock(&self.update).stage, UpdateStage::Unknown) {
+                    self.check_for_updates(false);
+                }
+            }
         }
 
         // Countdown before a delayed capture.
@@ -2451,11 +2073,7 @@ impl ApplicationHandler for App {
                     self.capture_at.pop_front();
                 } else {
                     self.capture_at.pop_front();
-                    match kind {
-                        CaptureKind::Region => self.trigger_capture(event_loop),
-                        CaptureKind::Screenshot => self.do_screenshot(event_loop),
-                        CaptureKind::LastRegion => self.do_last_region(event_loop),
-                    }
+                    self.run_capture(event_loop, kind);
                     if let Some(&(next, _)) = self.capture_at.front() {
                         wake_at(next);
                     }
@@ -2519,6 +2137,16 @@ impl ApplicationHandler for App {
             wake_at(Instant::now() + Duration::from_millis(100));
         }
 
+        // With no window of ours left that draws text, a system font that
+        // was read for one (a CJK file name in a popup) can go.
+        if self.toast.is_none()
+            && self.overlay_window.is_none()
+            && self.settings_window.is_none()
+            && self.history_window.is_none()
+        {
+            screen_mark::font::release_fallbacks();
+        }
+
         match wake {
             Some(t) => event_loop.set_control_flow(ControlFlow::WaitUntil(t)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
@@ -2526,28 +2154,50 @@ impl ApplicationHandler for App {
     }
 }
 
-fn run_tray_app(config: Config) {
-    // Single-instance enforcement: only one tray app at a time
-    #[cfg(target_os = "windows")]
-    {
-        use windows::core::w;
-        use windows::Win32::Foundation::GetLastError;
-        use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
-        use windows::Win32::System::Threading::CreateMutexW;
+/// Single-instance enforcement: only one tray app at a time. False when
+/// another one is running. With `wait`, the other one is the version an
+/// update just replaced, on its way out: give it time to go.
+#[cfg(target_os = "windows")]
+fn only_instance(wait: bool) -> bool {
+    use windows::core::w;
+    use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    let give_up = Instant::now() + Duration::from_secs(20);
+    loop {
         unsafe {
-            if let Ok(m) = CreateMutexW(None, false, w!("screen-mark.SingleInstance")) {
-                if GetLastError() == ERROR_ALREADY_EXISTS {
-                    let _ = windows::Win32::Foundation::CloseHandle(m);
-                    screen_mark::notify::system(
-                        "screen-mark",
-                        "screen-mark is already running in the system tray",
-                    );
-                    return;
-                }
+            let Ok(m) = CreateMutexW(None, false, w!("screen-mark.SingleInstance")) else {
+                return true;
+            };
+            if GetLastError() != ERROR_ALREADY_EXISTS {
                 // Mutex handle is Copy — kernel keeps it alive for the process lifetime
                 let _ = m;
+                return true;
             }
+            let _ = CloseHandle(m);
         }
+        if !wait || Instant::now() >= give_up {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn run_tray_app(config: Config, updated_from: Option<String>) {
+    // The tray app has no console: a panic shows a dialog naming the log.
+    screen_mark::logging::show_dialog_on_panic(true);
+    #[cfg(target_os = "windows")]
+    if !only_instance(updated_from.is_some()) {
+        screen_mark::notify::system(
+            "screen-mark",
+            "screen-mark is already running in the system tray",
+        );
+        return;
+    }
+    // This start is the proof the new version runs: the one an update
+    // kept beside it can go.
+    if let Ok(exe) = std::env::current_exe() {
+        update::remove_leftovers(&exe);
     }
 
     let event_loop = match EventLoop::new() {
@@ -2559,6 +2209,7 @@ fn run_tray_app(config: Config) {
     };
     screen_mark::notify::register_app_id();
     let mut app = App::new(config);
+    app.updated_from = updated_from;
     app.set_proxy(event_loop.create_proxy());
     if let Err(e) = event_loop.run_app(&mut app) {
         screen_mark::installer::show_error(&format!("Event loop error: {e}"));
@@ -2567,6 +2218,8 @@ fn run_tray_app(config: Config) {
 }
 
 fn run_tray_app_with_immediate_capture(config: Config) {
+    // Nobody reads stderr while the overlay is up; show a dialog instead.
+    screen_mark::logging::show_dialog_on_panic(true);
     let event_loop = match EventLoop::new() {
         Ok(el) => el,
         Err(e) => {
@@ -2638,16 +2291,14 @@ fn run_cli_capture(clipboard: bool, save: Option<String>, delay: u64) {
         }
     }
     if let Some(path) = save {
-        let img =
-            match image::RgbaImage::from_raw(screen.width, screen.height, screen.pixels.clone()) {
-                Some(img) => img,
-                None => {
-                    eprintln!("Invalid image data ({}x{})", screen.width, screen.height);
-                    std::process::exit(1);
-                }
-            };
-        match img.save(&path) {
-            Ok(_) => println!("Saved to {}", path),
+        let written = export::write_image(
+            std::path::Path::new(&path),
+            screen.pixels.clone(),
+            screen.width,
+            screen.height,
+        );
+        match written {
+            Ok(()) => println!("Saved to {}", path),
             Err(e) => {
                 eprintln!("Save error: {}", e);
                 std::process::exit(1);
@@ -2656,9 +2307,61 @@ fn run_cli_capture(clipboard: bool, save: Option<String>, delay: u64) {
     }
 }
 
+/// `screen-mark update`: look for a newer release and, unless `check_only`,
+/// install it.
+fn run_cli_update(check_only: bool, from: Option<String>) {
+    let source = match from {
+        Some(place) => Source::from_setting(&place),
+        None => Source::from_setting(&Config::load().updates.url),
+    };
+    let running = Version::running();
+    let release = match update::check(&source, running, &update::keys::trusted()) {
+        Ok(Check::Available(release)) => release,
+        Ok(Check::UpToDate { latest }) if latest == running => {
+            println!("screen-mark {running} is up to date.");
+            return;
+        }
+        Ok(Check::UpToDate { latest }) => {
+            println!("screen-mark {running} is newer than the newest release, {latest}.");
+            return;
+        }
+        Err(e) => {
+            eprintln!("Couldn't check for updates: {e}");
+            std::process::exit(1);
+        }
+    };
+    let version = release.version();
+    println!("screen-mark {version} is available (this is {running}).");
+    if check_only {
+        return;
+    }
+
+    let installed = update::running_copy().and_then(|(exe, kind)| {
+        println!("Installing it...");
+        update::install(&release, &exe, kind)
+    });
+    match installed {
+        Ok(()) => println!(
+            "screen-mark {version} is installed. A screen-mark that is running \
+             keeps the old version until it is restarted."
+        ),
+        Err(e) => {
+            eprintln!("The update wasn't installed: {e}");
+            eprintln!("It can be downloaded from {}", release.page());
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
-    tracing_subscriber::fmt::init();
-    tracing::info!("screen-mark starting");
+    screen_mark::logging::init();
+    screen_mark::logging::install_panic_hook();
+    tracing::info!("screen-mark {} starting", env!("CARGO_PKG_VERSION"));
+    // Set by a screen-mark that updated itself and started this one.
+    let updated_from = std::env::var(update::UPDATED_FROM)
+        .ok()
+        .filter(|old| !old.is_empty());
+    std::env::remove_var(update::UPDATED_FROM);
 
     #[cfg(target_os = "windows")]
     {
@@ -2697,7 +2400,10 @@ fn main() {
             // installer spawns the installed copy and we exit). Declining runs
             // the app portably from its current location. needs_install() is
             // always false in debug builds and on non-Windows platforms.
-            if screen_mark::installer::needs_install() && screen_mark::installer::confirm_install()
+            // A copy that was just updated where it is has been asked before.
+            if updated_from.is_none()
+                && screen_mark::installer::needs_install()
+                && screen_mark::installer::confirm_install()
             {
                 if let Err(e) = screen_mark::installer::install() {
                     screen_mark::installer::show_error(&format!("Install failed: {e}"));
@@ -2715,8 +2421,9 @@ fn main() {
                 config.general.default_color,
                 config.general.default_thickness
             );
-            run_tray_app(config);
+            run_tray_app(config, updated_from);
         }
+        Some(Commands::Update { check, from }) => run_cli_update(check, from),
         Some(Commands::Capture {
             clipboard,
             save,

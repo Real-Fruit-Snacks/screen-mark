@@ -1,5 +1,5 @@
 use crate::geometry::{Point, Size};
-use crate::tools::{render_annotation, Annotation};
+use crate::tools::{render_annotations, Annotation, Backdrop};
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 /// Flatten annotations onto a pixel buffer.
@@ -26,17 +26,17 @@ pub fn flatten_annotations(
 
     // Fast path: screenshots are fully opaque (a=255), so premultiplication is a
     // no-op — we can copy components directly instead of multiplying per pixel.
-    let all_opaque = pixels.chunks_exact(4).all(|px| px[3] == 255);
+    let all_opaque = pixels.as_chunks::<4>().0.iter().all(|px| px[3] == 255);
     let pm_pixels = pixmap.pixels_mut();
     if all_opaque {
-        for (i, chunk) in pixels.chunks_exact(4).enumerate() {
+        for (i, chunk) in pixels.as_chunks::<4>().0.iter().enumerate() {
             pm_pixels[i] = PremultipliedColorU8::from_rgba(chunk[0], chunk[1], chunk[2], 255)
                 .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
     } else {
         // Straight RGBA in — premultiply each component. The multiply guarantees
         // component <= alpha, so from_rgba cannot fail here.
-        for (i, chunk) in pixels.chunks_exact(4).enumerate() {
+        for (i, chunk) in pixels.as_chunks::<4>().0.iter().enumerate() {
             let a = chunk[3] as u16;
             let pm = |c: u8| ((c as u16 * a + 127) / 255) as u8;
             pm_pixels[i] =
@@ -45,10 +45,8 @@ pub fn flatten_annotations(
         }
     }
 
-    // Render each annotation
-    for annotation in annotations {
-        render_annotation(annotation, &mut pixmap, Some(pixels), Some(width));
-    }
+    // The same call the overlay makes, so the export matches the screen.
+    render_annotations(annotations, None, &mut pixmap, Backdrop { pixels, width });
 
     // Demultiply back to straight alpha
     let pm_pixels = pixmap.pixels();
@@ -234,6 +232,15 @@ fn offset_annotation(annotation: &Annotation, dx: f32, dy: f32) -> Annotation {
         Annotation::Measurement { start, end, color } => Annotation::Measurement {
             start: Point::new(start.x - dx, start.y - dy),
             end: Point::new(end.x - dx, end.y - dy),
+            color: *color,
+        },
+        Annotation::Redact {
+            top_left,
+            size,
+            color,
+        } => Annotation::Redact {
+            top_left: Point::new(top_left.x - dx, top_left.y - dy),
+            size: Size::new(size.width, size.height),
             color: *color,
         },
     }
@@ -434,34 +441,52 @@ pub fn save_to_file(
 
     match path {
         Some(p) => {
-            let img = image::RgbaImage::from_raw(width, height, pixels)
-                .ok_or_else(|| "Failed to create image from pixel data".to_string())?;
-
-            // Detect format from extension
-            let ext = p
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("png")
-                .to_lowercase();
-
-            match ext.as_str() {
-                "jpg" | "jpeg" => {
-                    // Convert RGBA to RGB for JPEG (JPEG doesn't support alpha)
-                    let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
-                    rgb_img
-                        .save(&p)
-                        .map_err(|e| format!("Failed to save image: {e}"))?;
-                }
-                _ => {
-                    // PNG, WebP, and any other extension — image crate infers
-                    // the format from the extension automatically.
-                    img.save(&p)
-                        .map_err(|e| format!("Failed to save image: {e}"))?;
-                }
-            }
-
+            write_image(&p, pixels, width, height)?;
             Ok(Some(p.to_string_lossy().into_owned()))
         }
         None => Ok(None),
     }
+}
+
+/// The formats `write_image` writes, as an error message names them.
+pub const SAVE_FORMATS: &str = "PNG, JPEG, WebP or BMP";
+
+/// Write RGBA8 pixels to `path`. The extension picks the format; a name
+/// with no extension is written as PNG. Used by the save dialog and by
+/// `screen-mark capture --save`.
+pub fn write_image(
+    path: &std::path::Path,
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    use image::ImageFormat;
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+    let format = match ext.as_str() {
+        "png" => ImageFormat::Png,
+        "jpg" | "jpeg" => ImageFormat::Jpeg,
+        "webp" => ImageFormat::WebP,
+        "bmp" => ImageFormat::Bmp,
+        other => {
+            return Err(format!(
+                "Can't save as .{other}: screen-mark writes {SAVE_FORMATS}"
+            ))
+        }
+    };
+    let img = image::RgbaImage::from_raw(width, height, pixels)
+        .ok_or_else(|| "Failed to create image from pixel data".to_string())?;
+    let result = if format == ImageFormat::Jpeg {
+        // JPEG has no alpha channel.
+        image::DynamicImage::ImageRgba8(img)
+            .to_rgb8()
+            .save_with_format(path, format)
+    } else {
+        img.save_with_format(path, format)
+    };
+    result.map_err(|e| format!("Failed to save image: {e}"))
 }

@@ -7,14 +7,16 @@ license = "MIT"
 repository = "https://github.com/Real-Fruit-Snacks/screen-mark"
 homepage = "https://real-fruit-snacks.github.io/screen-mark/"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 
 [dependencies]
 winit = "0.30"
 softbuffer = "0.4"
 tiny-skia = "0.11"
 tray-icon = "0.19"
-image = "0.25"
+# Only the formats screen-mark reads and writes. The default feature set also
+# builds an AVIF encoder, OpenEXR, TIFF and a dozen more.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 thiserror = "2"
@@ -23,6 +25,11 @@ rfd = "0.15"
 chrono = "0.4"
 global-hotkey = "0.6"
 fontdue = "0.9"
+# System fonts for characters the embedded font lacks (see src/font.rs).
+# Both are already in the tree through resvg; these pin the same versions.
+fontdb = "0.22"
+ttf-parser = "0.24"
+unicode-segmentation = "1"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 dirs = "6"
@@ -32,6 +39,11 @@ ureq = "2"
 serde_json = "1"
 base64 = "0.22"
 resvg = "0.44"
+# The updater (src/update): ring checks a release's signature and SHA-256,
+# flate2 reads the program out of the downloaded archive. Both are already
+# in the tree (ureq's TLS, the PNG codec); these add no packages.
+ring = "0.17"
+flate2 = "1"
 
 [build-dependencies]
 winres = "0.1"
@@ -58,7 +70,19 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_Security",
     "Win32_UI_HiDpi",
+    "Win32_Globalization",
+    # OCR (src/ocr.rs): the Windows.Media.Ocr engine, called in-process.
+    "Foundation",
+    "Foundation_Collections",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
 ] }
+
+# Screen readers (src/access.rs): Settings and History described to UI
+# Automation, which Narrator, NVDA and JAWS read.
+accesskit = "0.25"
+accesskit_winit = { version = "0.34", default-features = false, features = ["rwh_06"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["randr"] }

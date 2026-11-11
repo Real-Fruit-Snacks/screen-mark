@@ -2,6 +2,43 @@
 
 All notable changes to screen-mark will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Redact tool** (`X`): a solid box that keeps nothing of what is under it. Pixelate keeps a block average, which is not always enough to hide text. A Pixelate drawn across a Redact box averages the box, never what it hides, whichever was drawn first. Black by default; select it and click a swatch to recolour. Fifteen tools now; `[shortcuts] redact` and `[toolbar] redact` in the config.
+- **Text annotations have a caret and can have several lines.** `Shift+Enter` starts a new line (`Enter` still finishes), the arrow keys, `Home`, `End` and `Delete` work, a click on the text moves the caret, and pasted text keeps its lines. Input methods (IME) are passed through while typing; this part has had no real use yet.
+- **Characters the built-in font lacks** (Chinese, Japanese, Korean, emoji, ...) are drawn with a font installed on the system, in text annotations and in popups. Nothing is read until one turns up.
+- **Pixel-exact selection.** A magnifier beside the pointer while a region is placed, dragged out or resized (`[general] magnifier`, and a switch in Settings › Capture). Arrow keys move the pointer one pixel (ten with `Shift`); with a region they move it, `Ctrl`+arrows resize it; with an annotation selected they move that, as one undo step. `Shift` while dragging gives a square region, squares and circles, and lines at 15° steps.
+- **Settings and History work from the keyboard.** `Tab`, `Shift+Tab` and the arrow keys move between controls with a visible focus ring, `Enter` or `Space` presses, `Ctrl+Tab` changes tab, `Ctrl+Enter` saves, `Esc` closes. In History the arrows move over the grid.
+- **Screen readers (Windows).** Settings and History are described to UI Automation through AccessKit: every control's role, name, state and place, and the message line. `cargo run --example access_probe` opens Settings alone for checking with Narrator or Accessibility Insights.
+- **A log file**, `screen-mark.log` next to the history (`%LocalAppData%\screen-mark` on Windows). The tray app has no console, so its log used to go nowhere. It starts afresh at 1 MB. A panic is written to it with a backtrace, and the tray app shows a dialog naming the file instead of vanishing.
+- **Updating from inside screen-mark.** *Check for updates* in the tray menu looks for a newer release; if there is one the item becomes *Install screen-mark X.Y.Z*, which downloads it, puts it in place and restarts. `screen-mark update` does the same from a terminal, and `screen-mark update --check` only looks. Nothing is fetched unless you ask: *Check for a new version once a day* in Settings › General (`[updates] auto_check`) is off by default, and when it is on it tells you and installs nothing by itself.
+  - A release is installed only if its `latest.json` is signed (Ed25519) with one of two keys compiled into screen-mark, each download has the size and SHA-256 that file gives, and the new program starts and reports the release's version. A release that isn't newer than the running one is never installed. The version that was replaced stays beside the new one until the new one has started.
+  - A self-installed or unpacked copy has its program file replaced. A copy from the MSI runs the new MSI. A copy from Scoop, winget or Chocolatey, or in a folder screen-mark can't write to, is left alone.
+  - `[updates] url` points it at a web folder or a folder path instead of GitHub; the website zip's `docs/downloads/` is one, so an internal server can serve updates.
+  - No new packages: the signature and checksum code is `ring` and the unpacking is `flate2`, both already in the tree.
+- Releases carry `latest.json` and `latest.json.sig`, written and signed by the release workflow (`.github/scripts/update-manifest.sh`). A tagged release fails before publishing if the signing key is missing or is not one screen-mark trusts.
+
+### Changed
+- **The overlay redraws only what changed.** Every pointer move used to copy the whole desktop, draw on it, convert all of it and hand all of it to the window. Now a frame puts the background back where the last one drew, draws again, and gives the window just those areas. Timed with `cargo run --release --example overlay_bench` (screen-mark's own work per frame; the system's copy to the screen shrinks the same way and is not in these numbers): on one 4K screen 9–11 ms became 0.3–1.7 ms, on two 17–18 ms became 0.4–1.6 ms. After a click or a key the frame is still drawn whole, about 8 ms and 18 ms. `tests/overlay_frame_tests.rs` holds the patched frame to a freshly drawn one through random sessions.
+- **The overlay keeps three copies of the desktop instead of five**: about 100 MB on a 4K screen where it was 166, 199 MB on two where it was 332. The dimmed copy is gone (the background is dimmed as it is painted), and so is a second copy of the capture. Opening the overlay does less for the same reason: about 19 ms of work after the capture instead of 31 on one 4K screen, 25–30 instead of 61 on two.
+- A spotlight dims the picture only. It used to dim the selection border, the crosshair and the size label with it.
+- **OCR runs in-process** on the Windows.Media.Ocr engine instead of through a PowerShell script with `-ExecutionPolicy Bypass`. It takes a few milliseconds instead of the quarter of a second and more that starting PowerShell costs, writes no temp copy of the capture to disk, and works where PowerShell is locked down. Lines of text are copied as lines. A capture wider than the engine's 10 000 px limit is scaled to fit.
+- A region capture that can't start (the screen can't be read, the overlay can't open) now says so in a popup; a click on it shows the log. It used to do nothing visible. Settings, History and auto-start failures are reported the same way.
+- A pin's middle-click copies the capture itself, without the pin's border and shadow, and the temp file a right-click reveals is the capture too. The copy is reported in the usual popup, so `notifications = "off"` applies to it. Copying from History is reported the same way.
+- `screen-mark capture --save` writes JPEG correctly (it used to fail on the alpha channel) and accepts PNG, JPEG, WebP or BMP; other extensions are refused with a message that says so.
+- The minimum Rust version is 1.88, which is what the locked dependencies need. `rust-version` said 1.80, but the locked `image` 0.25.10 alone needs 1.88. CI now builds with the declared version.
+- `image` is built with PNG, JPEG, WebP and BMP only. The default feature set also compiled an AVIF encoder, OpenEXR and TIFF. With the Windows accessibility crates added, the lockfile goes from 517 packages to 487.
+- The overlay's mouse and keyboard handling moved out of `main.rs` into `src/overlay/input.rs`, where tests drive it without a window. The overlay and the export draw annotations with the same code, and a test compares the region on screen with the copied image pixel for pixel.
+- Window capture reads the list of windows when the capture is taken, not when the tray menu was clicked.
+
+### Fixed
+- **Spotlight was missing from the copied or saved image.** It showed in the overlay only.
+- Clicking somewhere else while typing a text annotation threw the text away; it now finishes the text. Copy, Save, Pin and Upload from the toolbar include text that is still being typed.
+- The text caret was white and invisible on a white page; it takes the text's colour.
+- A drag of a pixel or two left a selection too small to see, with the toolbar attached.
+- Picking *Capture window* while a delayed capture was counting down left that capture, or the next one, in window mode.
+
 ## [2.2.1] - 2026-11-05
 
 Everything needed to run and build screen-mark with no internet access is now in the release. See *Offline and air-gapped use* in the README.

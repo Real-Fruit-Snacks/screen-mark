@@ -26,6 +26,8 @@ pub enum Item {
     History,
     Autostart,
     Settings,
+    /// Check for updates, or install the one that was found.
+    Update,
     About,
     Quit,
 }
@@ -41,6 +43,8 @@ pub enum TrayEvent {
 const REGION_LABEL: &str = "Capture region";
 const SCREENSHOT_LABEL: &str = "Screenshot (save + copy)";
 const LAST_REGION_LABEL: &str = "Last region again (save + copy)";
+/// The update item before anything is known; `set_update` changes it.
+pub const UPDATE_LABEL: &str = "Check for updates";
 
 /// The menu and icon. Owned by the thread that created them.
 struct TrayState {
@@ -48,6 +52,7 @@ struct TrayState {
     screenshot_item: MenuItem,
     last_region_item: MenuItem,
     autostart_check: CheckMenuItem,
+    update_item: MenuItem,
     _tray: tray_icon::TrayIcon,
 }
 
@@ -61,6 +66,9 @@ impl TrayState {
     }
     fn set_autostart(&self, on: bool) {
         self.autostart_check.set_checked(on);
+    }
+    fn set_update(&self, text: &str) {
+        self.update_item.set_text(text);
     }
 }
 
@@ -99,6 +107,7 @@ fn build(
     let folder = plain("Open captures folder");
     let history = plain("History");
     let settings = plain("Settings");
+    let update_item = plain(UPDATE_LABEL);
     let about = plain("About");
     let quit = plain("Quit");
     for (item, kind) in [
@@ -112,6 +121,7 @@ fn build(
         (&folder, Item::OpenFolder),
         (&history, Item::History),
         (&settings, Item::Settings),
+        (&update_item, Item::Update),
         (&about, Item::About),
         (&quit, Item::Quit),
     ] {
@@ -132,7 +142,8 @@ fn build(
     menu.append(&sep()).map_err(err)?;
     menu.append_items(&[&folder, &history]).map_err(err)?;
     menu.append(&autostart_check).map_err(err)?;
-    menu.append_items(&[&settings, &about]).map_err(err)?;
+    menu.append_items(&[&settings, &update_item, &about])
+        .map_err(err)?;
     menu.append(&sep()).map_err(err)?;
     menu.append(&quit).map_err(err)?;
 
@@ -172,6 +183,7 @@ fn build(
         screenshot_item,
         last_region_item,
         autostart_check,
+        update_item,
         _tray: tray,
     })
 }
@@ -198,6 +210,24 @@ impl TrayHandle {
                 GTK_TRAY.with(|t| {
                     if let Some(t) = t.borrow().as_ref() {
                         t.set_bindings(&r, &s, &l);
+                    }
+                })
+            });
+        }
+    }
+
+    /// Relabel the update item: "Check for updates", "Install screen-mark
+    /// 2.3.0", and so on.
+    pub fn set_update(&self, text: &str) {
+        #[cfg(not(target_os = "linux"))]
+        self.state.set_update(text);
+        #[cfg(target_os = "linux")]
+        {
+            let text = text.to_string();
+            gtk::glib::idle_add_once(move || {
+                GTK_TRAY.with(|t| {
+                    if let Some(t) = t.borrow().as_ref() {
+                        t.set_update(&text);
                     }
                 })
             });

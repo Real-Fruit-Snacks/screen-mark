@@ -39,6 +39,9 @@ pub enum Click {
     ShowFile(PathBuf),
     /// Open the Settings window on the Keys tab.
     OpenKeySettings,
+    /// Do what the tray's update item does now: install the update that
+    /// was found, or restart into one that is installed.
+    Update,
 }
 
 /// A small RGBA8 image.

@@ -14,7 +14,8 @@ I acknowledge reports within 48 hours and give a first assessment within a week.
 
 ## In scope
 
-- Command injection, in particular the PowerShell path used for OCR
+- The updater (`src/update/`): anything that gets screen-mark to install a release that is not signed with the keys in `src/update/keys.rs`, to install an older release, or to run a download before it has been checked
+- Command injection, in particular the PowerShell call the self-installer makes for the Start Menu shortcut
 - Memory safety in `unsafe` blocks (Win32 capture, X11 capture, clipboard)
 - Path traversal in save, history, and pin temp-file handling
 - Secret exposure, such as the Imgur client ID or anything written to logs

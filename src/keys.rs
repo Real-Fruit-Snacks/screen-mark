@@ -479,6 +479,16 @@ fn key_from_code(kc: KeyCode) -> Option<Key> {
     }
 }
 
+/// The named key a logical key stands for (Enter, Esc, the arrows, ...),
+/// whichever physical key produced it. `None` for characters and for named
+/// keys screen-mark has no use for.
+pub fn named_from_logical(logical: &WKey) -> Option<Named> {
+    match logical {
+        WKey::Named(n) => Named::from_logical(n),
+        _ => None,
+    }
+}
+
 /// The character a key press types (lowercase), for matching 2.0-style
 /// `Key::Typed` tool keys.
 pub fn typed_char(logical: &WKey) -> Option<char> {
@@ -769,7 +779,7 @@ pub enum KeyId {
     Pin,
     Ocr,
     Upload,
-    /// Index into `ShortcutsConfig::entries()` (0..14).
+    /// Index into `ShortcutsConfig::entries()` and `tools::TOOL_ORDER`.
     Tool(usize),
 }
 
@@ -837,7 +847,7 @@ impl KeyId {
 }
 
 /// Tool labels, in `ShortcutsConfig::entries()` order.
-pub const TOOL_LABELS: [&str; 14] = [
+pub const TOOL_LABELS: [&str; 15] = [
     "Select / move",
     "Arrow",
     "Rectangle",
@@ -852,10 +862,11 @@ pub const TOOL_LABELS: [&str; 14] = [
     "Step marker",
     "Eyedropper",
     "Measurement",
+    "Redact (solid box)",
 ];
 
-const TOOL_DEFAULTS: [&str; 14] = [
-    "V", "A", "R", "C", "O", "L", "P", "H", "F", "T", "B", "N", "I", "M",
+const TOOL_DEFAULTS: [&str; 15] = [
+    "V", "A", "R", "C", "O", "L", "P", "H", "F", "T", "B", "N", "I", "M", "X",
 ];
 
 /// The result of checking every binding in a config.

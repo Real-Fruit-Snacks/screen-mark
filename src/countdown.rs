@@ -120,7 +120,7 @@ impl Countdown {
         // Background: theme surface (opaque — softbuffer has no alpha)
         let (bg_r, bg_g, bg_b) = crate::theme::bg_1();
         let pixels_data = pixmap.data_mut();
-        for chunk in pixels_data.chunks_exact_mut(4) {
+        for chunk in pixels_data.as_chunks_mut::<4>().0 {
             chunk[0] = bg_r;
             chunk[1] = bg_g;
             chunk[2] = bg_b;
@@ -158,7 +158,7 @@ impl Countdown {
         if let Ok(mut buffer) = self.surface.buffer_mut() {
             let src = pixmap.data();
             let pixel_count = (CD_SIZE * CD_SIZE) as usize;
-            for (i, chunk) in src.chunks_exact(4).take(pixel_count).enumerate() {
+            for (i, chunk) in src.as_chunks::<4>().0.iter().take(pixel_count).enumerate() {
                 buffer[i] =
                     ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
             }

@@ -61,6 +61,10 @@ fn get_svg(name: &str) -> Option<String> {
         "spotlight" => {
             r#"<circle cx="12" cy="12" r="3"/><path d="M3 7V3h4"/><path d="M17 3h4v4"/><path d="M21 17v4h-4"/><path d="M7 21H3v-4"/>"#
         }
+        // A text line with a solid bar over the part that mustn't be read.
+        "redact" => {
+            r#"<path d="M3 5h13"/><rect x="3" y="9" width="18" height="6" rx="1" fill="currentColor"/><path d="M3 19h9"/>"#
+        }
         "measurement" => {
             r#"<path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/>"#
         }

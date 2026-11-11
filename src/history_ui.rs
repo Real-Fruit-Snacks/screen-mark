@@ -1,3 +1,13 @@
+//! The History window: thumbnails of the last captures; click one to copy
+//! it again.
+//!
+//! `HistoryView` holds the state and draws into a `Pixmap`; it takes clicks
+//! (logical pixels) and key presses, and needs no window, so tests can drive
+//! it. `HistoryWindow` wraps it with a winit window and a softbuffer surface.
+//!
+//! Keyboard: the arrow keys move between captures (Tab and Shift+Tab too),
+//! Enter or Space copies the focused one, Esc closes.
+
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -5,7 +15,9 @@ use std::sync::Arc;
 use tiny_skia::{Color as SkiaColor, Paint, Pixmap, Rect, Transform};
 use winit::window::Window;
 
+use crate::access::{Control, Request, Role, Snapshot};
 use crate::geometry::{Color, Point};
+use crate::keys::{Key, KeyPress, Named};
 use crate::tools::{measure_text_width, render_text_annotation};
 
 /// Width / height of the history window in LOGICAL pixels (the window is
@@ -14,12 +26,15 @@ pub const WIN_W: u32 = 600;
 pub const WIN_H: u32 = 400;
 
 /// Thumbnail grid layout
-const COLS: usize = 4;
+pub const COLS: usize = 4;
 const THUMB_W: u32 = 120;
 const THUMB_H: u32 = 80;
 const PADDING: f32 = 16.0;
 const GAP: f32 = 12.0;
 const HEADER_H: f32 = 44.0;
+
+/// The "Clear All" button in the header: (x, y, w, h).
+const CLEAR_RECT: (f32, f32, f32, f32) = (WIN_W as f32 - PADDING - 80.0, 10.0, 80.0, 24.0);
 
 /// A loaded thumbnail: path, RGBA pixels, width, height.
 struct Thumbnail {
@@ -29,44 +44,78 @@ struct Thumbnail {
     height: u32,
 }
 
-pub struct HistoryWindow {
-    pub window: Arc<Window>,
-    pub surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
-    thumbnails: Vec<Thumbnail>,
-    pub hovered: Option<usize>,
-    pub needs_redraw: bool,
-    pub cursor_pos: (f32, f32),
-    /// Vertical scroll offset in logical pixels (0 = top).
-    scroll_offset: f32,
-    /// Rect of the "Clear All" header button (x, y, w, h).
-    clear_rect: (f32, f32, f32, f32),
-    hover_clear: bool,
+/// What has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    ClearAll,
+    /// A capture, newest first.
+    Capture(usize),
 }
 
-impl HistoryWindow {
-    pub fn new(
-        window: Arc<Window>,
-        surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
-    ) -> Self {
-        let thumbnails = load_thumbnails();
+/// What the caller should do after an input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    Nothing,
+    Redraw,
+    Close,
+    /// Copy this capture to the clipboard and say so.
+    Copy(PathBuf),
+}
 
-        let clear_w = 80.0;
+/// All History state, no window.
+pub struct HistoryView {
+    thumbnails: Vec<Thumbnail>,
+    hovered: Option<usize>,
+    hover_clear: bool,
+    cursor: (f32, f32),
+    /// Vertical scroll offset in logical pixels (0 = top).
+    scroll_offset: f32,
+    focus: Option<Focus>,
+    /// Draw the focus ring. Set by the keyboard, cleared by the mouse.
+    focus_ring: bool,
+}
+
+impl Default for HistoryView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HistoryView {
+    /// The captures in the history folder, newest first.
+    pub fn new() -> Self {
         Self {
-            window,
-            surface,
-            thumbnails,
+            thumbnails: load_thumbnails(),
             hovered: None,
-            needs_redraw: true,
-            cursor_pos: (0.0, 0.0),
-            scroll_offset: 0.0,
-            clear_rect: (WIN_W as f32 - PADDING - clear_w, 10.0, clear_w, 24.0),
             hover_clear: false,
+            cursor: (-1.0, -1.0),
+            scroll_offset: 0.0,
+            focus: None,
+            focus_ring: false,
         }
+    }
+
+    /// How many captures are shown.
+    pub fn len(&self) -> usize {
+        self.thumbnails.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.thumbnails.is_empty()
+    }
+
+    pub fn focus(&self) -> Option<Focus> {
+        self.focus
+    }
+
+    /// Whether the focus ring is drawn (the keyboard was used last).
+    pub fn focus_visible(&self) -> bool {
+        self.focus_ring && self.focus.is_some()
     }
 
     /// Returns (x, y, w, h) of the thumbnail at the given index, in logical
     /// coordinates with the current scroll applied.
-    fn thumb_rect(&self, idx: usize) -> (f32, f32, f32, f32) {
+    pub fn thumb_rect(&self, idx: usize) -> (f32, f32, f32, f32) {
         let col = idx % COLS;
         let row = idx / COLS;
         let cell_w = THUMB_W as f32 + GAP;
@@ -78,6 +127,11 @@ impl HistoryWindow {
         } else {
             (x, y, THUMB_W as f32, THUMB_H as f32)
         }
+    }
+
+    /// The "Clear All" button, shown while there is something to clear.
+    pub fn clear_rect(&self) -> Option<(f32, f32, f32, f32)> {
+        (!self.thumbnails.is_empty()).then_some(CLEAR_RECT)
     }
 
     /// Total height of the thumbnail grid content (without scroll).
@@ -93,26 +147,227 @@ impl HistoryWindow {
         (self.content_height() - (WIN_H as f32 - HEADER_H)).max(0.0)
     }
 
+    // ───────────── input ─────────────
+
     /// Scroll by a wheel delta (positive = scroll up). Returns true if moved.
-    pub fn on_scroll(&mut self, delta: f32) -> bool {
+    pub fn scroll(&mut self, delta: f32) -> bool {
         let old = self.scroll_offset;
         self.scroll_offset = (self.scroll_offset - delta * 40.0).clamp(0.0, self.max_scroll());
-        if (self.scroll_offset - old).abs() > 0.01 {
-            self.needs_redraw = true;
-            true
-        } else {
-            false
+        (self.scroll_offset - old).abs() > 0.01
+    }
+
+    /// The pointer moved (logical pixels). Returns true if what is
+    /// highlighted changed.
+    pub fn hover(&mut self, x: f32, y: f32) -> bool {
+        self.cursor = (x, y);
+        let before = (self.hovered, self.hover_clear);
+        self.hover_clear = self.clear_rect().is_some_and(|r| within(r, x, y));
+        self.hovered = self.capture_at(x, y);
+        before != (self.hovered, self.hover_clear)
+    }
+
+    fn capture_at(&self, x: f32, y: f32) -> Option<usize> {
+        if y < HEADER_H {
+            return None;
+        }
+        (0..self.thumbnails.len()).find(|i| within(self.thumb_rect(*i), x, y))
+    }
+
+    /// A left click at (x, y), in logical pixels.
+    pub fn click(&mut self, x: f32, y: f32) -> Outcome {
+        self.cursor = (x, y);
+        // The mouse takes focus with it, without the ring.
+        self.focus_ring = false;
+        if self.clear_rect().is_some_and(|r| within(r, x, y)) {
+            self.focus = Some(Focus::ClearAll);
+            return self.press(Focus::ClearAll);
+        }
+        match self.capture_at(x, y) {
+            Some(i) => {
+                self.focus = Some(Focus::Capture(i));
+                self.press(Focus::Capture(i))
+            }
+            None => Outcome::Nothing,
         }
     }
 
-    /// Full render of the history UI into the softbuffer surface.
-    pub fn render(&mut self) {
-        let mut pixmap = match Pixmap::new(WIN_W, WIN_H) {
-            Some(p) => p,
-            None => return,
-        };
+    /// Do what a control does.
+    fn press(&mut self, what: Focus) -> Outcome {
+        match what {
+            Focus::ClearAll => {
+                if self.thumbnails.is_empty() {
+                    return Outcome::Nothing;
+                }
+                let removed = crate::history::clear_history();
+                tracing::info!("Cleared {} history entries", removed);
+                self.thumbnails.clear();
+                self.scroll_offset = 0.0;
+                self.hovered = None;
+                self.hover_clear = false;
+                self.focus = None;
+                Outcome::Redraw
+            }
+            Focus::Capture(i) => match self.thumbnails.get(i) {
+                Some(thumb) => Outcome::Copy(thumb.path.clone()),
+                None => Outcome::Nothing,
+            },
+        }
+    }
 
-        // Background
+    /// A key went down.
+    pub fn key(&mut self, press: KeyPress) -> Outcome {
+        if !press.pressed {
+            return Outcome::Nothing;
+        }
+        let Some(Key::Named(key)) = press.key else {
+            return Outcome::Nothing;
+        };
+        let count = self.thumbnails.len();
+        let mods = press.mods;
+        if mods.has_command() {
+            return Outcome::Nothing;
+        }
+        if key == Named::Escape {
+            return Outcome::Close;
+        }
+        if count == 0 {
+            return Outcome::Nothing;
+        }
+        let next = match (key, self.focus) {
+            (Named::Enter | Named::Space, Some(focus)) => {
+                self.focus_ring = true;
+                return self.press(focus);
+            }
+            // Nothing focused yet: any movement key starts at the newest
+            // capture (Shift+Tab at the oldest).
+            (Named::Tab, None) if mods.shift() => Focus::Capture(count - 1),
+            (
+                Named::Tab | Named::Right | Named::Left | Named::Down | Named::Up | Named::Home,
+                None,
+            ) => Focus::Capture(0),
+            (Named::End, _) => Focus::Capture(count - 1),
+            (Named::Home, _) => Focus::Capture(0),
+
+            // Tab walks everything in reading order, the button first.
+            (Named::Tab, Some(Focus::ClearAll)) if mods.shift() => Focus::Capture(count - 1),
+            (Named::Tab, Some(Focus::ClearAll)) => Focus::Capture(0),
+            (Named::Tab, Some(Focus::Capture(0))) if mods.shift() => Focus::ClearAll,
+            (Named::Tab, Some(Focus::Capture(i))) if mods.shift() => Focus::Capture(i - 1),
+            (Named::Tab, Some(Focus::Capture(i))) if i + 1 == count => Focus::ClearAll,
+            (Named::Tab, Some(Focus::Capture(i))) => Focus::Capture(i + 1),
+
+            // Arrows move on the grid; up from the top row is the button.
+            (Named::Right, Some(Focus::Capture(i))) => Focus::Capture((i + 1).min(count - 1)),
+            (Named::Left, Some(Focus::Capture(i))) => Focus::Capture(i.saturating_sub(1)),
+            (Named::Down, Some(Focus::Capture(i))) if i + COLS < count => Focus::Capture(i + COLS),
+            (Named::Up, Some(Focus::Capture(i))) if i >= COLS => Focus::Capture(i - COLS),
+            (Named::Up, Some(Focus::Capture(_))) => Focus::ClearAll,
+            (Named::Down | Named::Right, Some(Focus::ClearAll)) => Focus::Capture(0),
+            _ => return Outcome::Nothing,
+        };
+        self.set_focus(next);
+        Outcome::Redraw
+    }
+
+    /// Focus a control with the ring showing, scrolling a capture into view.
+    pub fn set_focus(&mut self, focus: Focus) {
+        self.focus = Some(focus);
+        self.focus_ring = true;
+        if let Focus::Capture(i) = focus {
+            let (_, y, _, h) = self.thumb_rect(i);
+            let top = HEADER_H + PADDING;
+            let bottom = WIN_H as f32 - PADDING;
+            if y < top {
+                self.scroll_offset -= top - y;
+            } else if y + h > bottom {
+                self.scroll_offset += y + h - bottom;
+            }
+            self.scroll_offset = self.scroll_offset.clamp(0.0, self.max_scroll());
+        }
+    }
+
+    // ───────────── for assistive technology ─────────────
+
+    /// Every control, in reading order.
+    fn order(&self) -> Vec<Focus> {
+        let mut order = Vec::new();
+        if !self.thumbnails.is_empty() {
+            order.push(Focus::ClearAll);
+        }
+        order.extend((0..self.thumbnails.len()).map(Focus::Capture));
+        order
+    }
+
+    /// The window as a screen reader should present it.
+    pub fn snapshot(&self) -> Snapshot {
+        let count = self.thumbnails.len();
+        let order = self.order();
+        let controls = order
+            .iter()
+            .map(|focus| match *focus {
+                Focus::ClearAll => Control {
+                    role: Role::Button,
+                    label: "Clear all captures from History".to_string(),
+                    checked: None,
+                    value: None,
+                    rect: Some(CLEAR_RECT),
+                },
+                Focus::Capture(i) => {
+                    let rect = self.thumb_rect(i);
+                    let in_view = rect.1 >= HEADER_H && rect.1 + rect.3 <= WIN_H as f32;
+                    Control {
+                        role: Role::Button,
+                        label: format!(
+                            "Capture {} of {count}{}. Copy it again",
+                            i + 1,
+                            capture_time(&self.thumbnails[i].path)
+                                .map(|t| format!(", taken {t}"))
+                                .unwrap_or_default()
+                        ),
+                        checked: None,
+                        value: None,
+                        rect: in_view.then_some(rect),
+                    }
+                }
+            })
+            .collect();
+        Snapshot {
+            title: "screen-mark History".to_string(),
+            controls,
+            focus: self.focus.and_then(|f| order.iter().position(|o| *o == f)),
+            status: self
+                .thumbnails
+                .is_empty()
+                .then(|| "No captures yet.".to_string()),
+        }
+    }
+
+    /// Carry out a screen reader's request on control `index` of `snapshot`.
+    pub fn request(&mut self, request: Request) -> Outcome {
+        let order = self.order();
+        match request {
+            Request::Press(i) => match order.get(i) {
+                Some(focus) => {
+                    self.set_focus(*focus);
+                    self.press(*focus)
+                }
+                None => Outcome::Nothing,
+            },
+            Request::Focus(i) => match order.get(i) {
+                Some(focus) => {
+                    self.set_focus(*focus);
+                    Outcome::Redraw
+                }
+                None => Outcome::Nothing,
+            },
+        }
+    }
+
+    // ───────────── drawing ─────────────
+
+    /// Draw the whole window at logical size.
+    pub fn render(&self) -> Pixmap {
+        let mut pixmap = Pixmap::new(WIN_W, WIN_H).expect("history size is non-zero");
         fill_rect_rgb(
             &mut pixmap,
             0.0,
@@ -121,6 +376,7 @@ impl HistoryWindow {
             WIN_H as f32,
             crate::theme::bg_1(),
         );
+        let ring = |focus: Focus| self.focus_ring && self.focus == Some(focus);
 
         if self.thumbnails.is_empty() {
             draw_label(
@@ -140,18 +396,20 @@ impl HistoryWindow {
                     continue;
                 }
 
-                // Border (highlight on hover)
-                let border_color = if self.hovered == Some(i) {
+                // Border: accent when hovered or focused, wider for focus.
+                let focused = ring(Focus::Capture(i));
+                let border_color = if focused || self.hovered == Some(i) {
                     crate::theme::accent()
                 } else {
                     crate::theme::bg_3()
                 };
+                let b = if focused { 4.0 } else { 2.0 };
                 fill_rect_rgb(
                     &mut pixmap,
-                    x - 2.0,
-                    y - 2.0,
-                    tw + 4.0,
-                    th + 4.0,
+                    x - b,
+                    y - b,
+                    tw + b * 2.0,
+                    th + b * 2.0,
                     border_color,
                 );
 
@@ -213,8 +471,25 @@ impl HistoryWindow {
             crate::theme::bg_3(),
         );
         // Clear All button
-        if !self.thumbnails.is_empty() {
-            let (cx, cy, cw, ch) = self.clear_rect;
+        if let Some((cx, cy, cw, ch)) = self.clear_rect() {
+            if ring(Focus::ClearAll) {
+                fill_rect_rgb(
+                    &mut pixmap,
+                    cx - 3.0,
+                    cy - 3.0,
+                    cw + 6.0,
+                    ch + 6.0,
+                    crate::theme::accent(),
+                );
+                fill_rect_rgb(
+                    &mut pixmap,
+                    cx - 1.0,
+                    cy - 1.0,
+                    cw + 2.0,
+                    ch + 2.0,
+                    crate::theme::bg_1(),
+                );
+            }
             let bg = if self.hover_clear {
                 crate::theme::bg_4()
             } else {
@@ -232,9 +507,64 @@ impl HistoryWindow {
                 crate::theme::text_normal(),
             );
         }
+        pixmap
+    }
+}
 
-        // Present, scaling the logical pixmap to the physical surface size
-        // (nearest neighbor) so the window is usable on high-DPI displays.
+/// When a history file was saved, from its name (milliseconds since 1970),
+/// as "5 Nov 14:30".
+fn capture_time(path: &std::path::Path) -> Option<String> {
+    use chrono::TimeZone;
+    let millis: i64 = path.file_stem()?.to_str()?.parse().ok()?;
+    let when = chrono::Local.timestamp_millis_opt(millis).single()?;
+    Some(when.format("%-d %b %H:%M").to_string())
+}
+
+fn within((x, y, w, h): (f32, f32, f32, f32), px: f32, py: f32) -> bool {
+    px >= x && px <= x + w && py >= y && py <= y + h
+}
+
+// ───────────── the window ─────────────
+
+/// `HistoryView` in a real window.
+pub struct HistoryWindow {
+    pub window: Arc<Window>,
+    pub surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
+    pub view: HistoryView,
+}
+
+impl HistoryWindow {
+    pub fn new(
+        window: Arc<Window>,
+        surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
+    ) -> Self {
+        Self {
+            window,
+            surface,
+            view: HistoryView::new(),
+        }
+    }
+
+    fn scale(&self) -> f32 {
+        self.window.scale_factor() as f32
+    }
+
+    /// Cursor moved (physical pixels). Returns true to redraw.
+    pub fn on_cursor_moved(&mut self, x: f32, y: f32) -> bool {
+        let s = self.scale();
+        self.view.hover(x / s, y / s)
+    }
+
+    /// Left click at the last cursor position.
+    pub fn on_click(&mut self) -> Outcome {
+        let (x, y) = self.view.cursor;
+        self.view.click(x, y)
+    }
+
+    /// Draw the view, scaling the logical pixmap to the physical surface
+    /// (nearest neighbour) so the window is usable on high-DPI displays.
+    pub fn render(&mut self) {
+        let pixmap = self.view.render();
         let phys = self.window.inner_size();
         let pw = phys.width.max(1);
         let ph = phys.height.max(1);
@@ -261,92 +591,27 @@ impl HistoryWindow {
             }
             let _ = buffer.present();
         }
-
-        self.needs_redraw = false;
     }
+}
 
-    /// Update cursor position (physical pixels). Returns true if hover changed.
-    pub fn on_cursor_moved(&mut self, x: f32, y: f32) -> bool {
-        // Scale physical cursor position to logical coordinates
-        let scale = self.window.scale_factor() as f32;
-        let x = x / scale;
-        let y = y / scale;
-        self.cursor_pos = (x, y);
-
-        let old_hovered = self.hovered;
-        let old_clear = self.hover_clear;
-
-        let (cx, cy, cw, ch) = self.clear_rect;
-        self.hover_clear = x >= cx && x <= cx + cw && y >= cy && y <= cy + ch;
-
-        self.hovered = None;
-        if y >= HEADER_H {
-            for i in 0..self.thumbnails.len() {
-                let (tx, ty, tw, th) = self.thumb_rect(i);
-                if x >= tx && x <= tx + tw && y >= ty && y <= ty + th {
-                    self.hovered = Some(i);
-                    break;
-                }
-            }
+/// Decode a history file and put it on the clipboard. Returns the popup to
+/// show, like any other copy.
+pub fn copy_capture(path: &std::path::Path) -> crate::toast::Spec {
+    use crate::toast::{Kind, Spec};
+    let image = match image::open(path) {
+        Ok(image) => image.to_rgba8(),
+        Err(e) => {
+            tracing::error!("Failed to open history image {}: {e}", path.display());
+            return Spec::new(
+                Kind::Error,
+                "Couldn't copy",
+                "That capture is gone from History",
+            );
         }
-        old_hovered != self.hovered || old_clear != self.hover_clear
-    }
-
-    /// Handle a click at the stored (logical) cursor position.
-    /// Returns true if the UI changed and needs a redraw.
-    pub fn on_click(&mut self) -> bool {
-        let (x, y) = self.cursor_pos;
-
-        // Clear All button
-        let (cx, cy, cw, ch) = self.clear_rect;
-        if !self.thumbnails.is_empty() && x >= cx && x <= cx + cw && y >= cy && y <= cy + ch {
-            let removed = crate::history::clear_history();
-            tracing::info!("Cleared {} history entries", removed);
-            self.thumbnails.clear();
-            self.scroll_offset = 0.0;
-            self.hovered = None;
-            self.needs_redraw = true;
-            return true;
-        }
-
-        if y < HEADER_H {
-            return false;
-        }
-
-        for i in 0..self.thumbnails.len() {
-            let (tx, ty, tw, th) = self.thumb_rect(i);
-            if x >= tx && x <= tx + tw && y >= ty && y <= ty + th {
-                if let Some(thumb) = self.thumbnails.get(i) {
-                    // Decode + clipboard copy on a background thread — the
-                    // full-resolution image can be large.
-                    let path = thumb.path.clone();
-                    std::thread::spawn(move || {
-                        let Ok(img) = image::open(&path) else {
-                            tracing::error!("Failed to open history image {}", path.display());
-                            return;
-                        };
-                        let rgba = img.to_rgba8();
-                        let (w, h) = rgba.dimensions();
-                        match crate::export::copy_to_clipboard(&rgba.into_raw(), w, h) {
-                            Ok(()) => {
-                                tracing::info!("Copied history image to clipboard");
-                                let _ = notify_rust::Notification::new()
-                                    .summary("screen-mark")
-                                    .body("Copied to clipboard")
-                                    .timeout(2000)
-                                    .show();
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to copy history image: {e}");
-                            }
-                        }
-                    });
-                }
-                return false;
-            }
-        }
-        false
-    }
+    };
+    let (w, h) = image.dimensions();
+    let copied = crate::export::copy_to_clipboard(&image.into_raw(), w, h);
+    crate::actions::describe(None, Some(copied), w, h)
 }
 
 fn load_thumbnails() -> Vec<Thumbnail> {

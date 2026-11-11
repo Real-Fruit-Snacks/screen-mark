@@ -6,6 +6,7 @@ pub mod measurement;
 pub mod pencil;
 pub mod pixelate;
 pub mod rectangle;
+pub mod redact;
 pub mod rounded_rect;
 pub mod spotlight;
 pub mod step_marker;
@@ -178,6 +179,13 @@ pub enum Annotation {
         end: Point,
         color: Color,
     },
+    /// A solid box that hides what is under it. Unlike Pixelate, nothing of
+    /// the capture survives inside it.
+    Redact {
+        top_left: Point,
+        size: Size,
+        color: Color,
+    },
 }
 
 pub trait AnnotationTool {
@@ -204,6 +212,194 @@ pub enum ToolKind {
     RoundedRect,
     Spotlight,
     Measurement,
+    Redact,
+}
+
+/// Every tool, in the order of `ShortcutsConfig::entries()`, the toolbar and
+/// the Keys tab: `KeyId::Tool(i)` picks `TOOL_ORDER[i]`.
+pub const TOOL_ORDER: [ToolKind; 15] = [
+    ToolKind::Select,
+    ToolKind::Arrow,
+    ToolKind::Rectangle,
+    ToolKind::Circle,
+    ToolKind::RoundedRect,
+    ToolKind::Line,
+    ToolKind::Pencil,
+    ToolKind::Highlight,
+    ToolKind::Spotlight,
+    ToolKind::Text,
+    ToolKind::Pixelate,
+    ToolKind::StepMarker,
+    ToolKind::Eyedropper,
+    ToolKind::Measurement,
+    ToolKind::Redact,
+];
+
+/// The capture the annotations are drawn over: what Pixelate averages and
+/// what a Spotlight keeps bright. Straight RGBA8, row-major; its height is
+/// `pixels.len() / (width * 4)`.
+#[derive(Debug, Clone, Copy)]
+pub struct Backdrop<'a> {
+    pub pixels: &'a [u8],
+    pub width: u32,
+}
+
+/// Draw a whole annotation list onto `pixmap`, which already holds the
+/// capture: what is copied or saved.
+///
+/// Spotlights are not drawn in turn. Together they dim everything outside
+/// them, and the other annotations then go on top at full strength, in
+/// order. `preview` is the annotation being drawn right now, if any; it
+/// goes last.
+pub fn render_annotations(
+    annotations: &[Annotation],
+    preview: Option<&Annotation>,
+    pixmap: &mut Pixmap,
+    backdrop: Backdrop<'_>,
+) {
+    let lit = spotlights(annotations, preview);
+    if !lit.is_empty() {
+        dim_outside(pixmap, &lit, backdrop);
+    }
+    draw_annotations(annotations, preview, pixmap, backdrop);
+}
+
+/// The lit rectangle of every Spotlight in the list, in whole pixels:
+/// (x, y, width, height). A rectangle that starts off the top or left edge
+/// is cut at the edge rather than slid onto the image.
+pub fn spotlights(
+    annotations: &[Annotation],
+    preview: Option<&Annotation>,
+) -> Vec<(usize, usize, usize, usize)> {
+    annotations
+        .iter()
+        .chain(preview)
+        .filter_map(|a| match a {
+            Annotation::Spotlight { top_left, size } => Some((
+                top_left.x.max(0.0) as usize,
+                top_left.y.max(0.0) as usize,
+                (size.width + top_left.x.min(0.0)).max(0.0) as usize,
+                (size.height + top_left.y.min(0.0)).max(0.0) as usize,
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Everything `render_annotations` draws except the Spotlights' dimming:
+/// each annotation in order. The overlay uses this on a background that is
+/// already dimmed around the spotlights (see `renderer`), so the picture
+/// is the one `render_annotations` makes.
+pub fn draw_annotations(
+    annotations: &[Annotation],
+    preview: Option<&Annotation>,
+    pixmap: &mut Pixmap,
+    backdrop: Backdrop<'_>,
+) {
+    let all = || annotations.iter().chain(preview);
+
+    // Redacted areas count as part of the capture for anything that reads
+    // it: a Pixelate drawn across a Redact box averages the box's colour,
+    // never what the box hides, whichever of the two was drawn first.
+    let redacted: Vec<Redacted> = all().filter_map(Redacted::of).collect();
+
+    for annotation in all() {
+        render_with(
+            annotation,
+            pixmap,
+            Some(backdrop.pixels),
+            Some(backdrop.width),
+            &redacted,
+        );
+    }
+}
+
+/// The whole pixels a Redact box covers, and its colour.
+#[derive(Debug, Clone, Copy)]
+struct Redacted {
+    x0: i64,
+    y0: i64,
+    x1: i64,
+    y1: i64,
+    rgb: [u8; 3],
+}
+
+impl Redacted {
+    fn of(annotation: &Annotation) -> Option<Redacted> {
+        let Annotation::Redact {
+            top_left,
+            size,
+            color,
+        } = annotation
+        else {
+            return None;
+        };
+        let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        Some(Redacted {
+            // Outwards to whole pixels: a box edge that falls inside a
+            // pixel hides the whole pixel.
+            x0: top_left.x.floor() as i64,
+            y0: top_left.y.floor() as i64,
+            x1: (top_left.x + size.width).ceil() as i64,
+            y1: (top_left.y + size.height).ceil() as i64,
+            rgb: [to_u8(color.r), to_u8(color.g), to_u8(color.b)],
+        })
+    }
+
+    fn covers(&self, x: usize, y: usize) -> bool {
+        let (x, y) = (x as i64, y as i64);
+        x >= self.x0 && x < self.x1 && y >= self.y0 && y < self.y1
+    }
+}
+
+/// Darken the whole pixmap, then copy the capture back inside each
+/// rectangle.
+fn dim_outside(pixmap: &mut Pixmap, lit: &[(usize, usize, usize, usize)], backdrop: Backdrop<'_>) {
+    let pm_w = pixmap.width() as usize;
+    let pm_h = pixmap.height() as usize;
+    let src_w = backdrop.width as usize;
+    let out = pixmap.data_mut();
+
+    // Half-transparent black over every pixel: colour halved, and alpha
+    // halfway to opaque (a capture is opaque and stays so). The overlay's
+    // background does the same sum (`renderer::paint_background`), so the
+    // screen and the export agree.
+    for px in out.as_chunks_mut::<4>().0 {
+        let pixel = u32::from_le_bytes(*px);
+        let colour = (pixel >> 1) & 0x007f_7f7f;
+        let alpha = ((pixel >> 25) + 128).min(255);
+        *px = (colour | (alpha << 24)).to_le_bytes();
+    }
+    for &(x, y0, w, h) in lit {
+        let copy_w = w.min(src_w.saturating_sub(x)).min(pm_w.saturating_sub(x));
+        if copy_w == 0 {
+            continue;
+        }
+        for y in y0..(y0 + h).min(pm_h) {
+            let src = (y * src_w + x) * 4;
+            let dst = (y * pm_w + x) * 4;
+            let (Some(from), Some(to)) = (
+                backdrop.pixels.get(src..src + copy_w * 4),
+                out.get_mut(dst..dst + copy_w * 4),
+            ) else {
+                break;
+            };
+            to.copy_from_slice(from);
+            // The pixmap is premultiplied; a capture is opaque, so this
+            // only does work for hand-made translucent input.
+            for px in to
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .filter(|px| px[3] != 255)
+            {
+                let a = px[3] as u16;
+                for c in &mut px[..3] {
+                    *c = ((*c as u16 * a + 127) / 255) as u8;
+                }
+            }
+        }
+    }
 }
 
 /// Compute the three vertices of an arrowhead triangle.
@@ -256,14 +452,26 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia
     pb.finish()
 }
 
-/// Render any Annotation variant onto a tiny_skia::Pixmap.
+/// Render one annotation onto a tiny_skia::Pixmap.
 ///
-/// This is the single rendering path used for both interactive preview and export.
+/// A Spotlight draws nothing here: it affects the whole image, so it is
+/// handled by [`render_annotations`], which the overlay and the export use.
 pub fn render_annotation(
     annotation: &Annotation,
     pixmap: &mut Pixmap,
     screenshot_pixels: Option<&[u8]>,
     screenshot_width: Option<u32>,
+) {
+    render_with(annotation, pixmap, screenshot_pixels, screenshot_width, &[]);
+}
+
+/// `render_annotation`, given the areas the annotation list redacts.
+fn render_with(
+    annotation: &Annotation,
+    pixmap: &mut Pixmap,
+    screenshot_pixels: Option<&[u8]>,
+    screenshot_width: Option<u32>,
+    redacted: &[Redacted],
 ) {
     match annotation {
         Annotation::Rectangle {
@@ -513,23 +721,9 @@ pub fn render_annotation(
             let num_str = number.to_string();
             let fs = size * 0.55;
 
-            // Measure actual text dimensions using fontdue for precise centering
-            let font = &*crate::font::FONT;
-
-            // Measure total advance width
-            let total_width: f32 = num_str
-                .chars()
-                .map(|ch| {
-                    let (metrics, _) = font.rasterize(ch, fs);
-                    metrics.advance_width
-                })
-                .sum();
-
-            // Get line metrics for vertical centering
-            let line_metrics = font.horizontal_line_metrics(fs);
-            let ascent = line_metrics.map(|m| m.ascent).unwrap_or(fs * 0.8);
-            let descent = line_metrics.map(|m| m.descent.abs()).unwrap_or(fs * 0.2);
-            let text_height = ascent + descent;
+            // Measure the number with the font's own metrics for precise centering
+            let total_width = measure_text_width(&num_str, fs);
+            let text_height = measure_text_height(fs);
 
             // Center horizontally and vertically in the circle
             // render_text_annotation treats position as the TOP of the text
@@ -589,9 +783,16 @@ pub fn render_annotation(
                             if sx < src_width {
                                 let si = (sy * src_width + sx) * 4;
                                 if si + 3 < src_pixels.len() {
-                                    sum_r += src_pixels[si] as u64;
-                                    sum_g += src_pixels[si + 1] as u64;
-                                    sum_b += src_pixels[si + 2] as u64;
+                                    // A redacted pixel is its box's colour.
+                                    let rgb = match redacted.iter().find(|r| r.covers(sx, sy)) {
+                                        Some(r) => r.rgb,
+                                        None => {
+                                            [src_pixels[si], src_pixels[si + 1], src_pixels[si + 2]]
+                                        }
+                                    };
+                                    sum_r += rgb[0] as u64;
+                                    sum_g += rgb[1] as u64;
+                                    sum_b += rgb[2] as u64;
                                     count += 1;
                                 }
                             }
@@ -659,9 +860,23 @@ pub fn render_annotation(
                 pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
             }
         }
+        Annotation::Redact { .. } => {
+            if let Some(r) = Redacted::of(annotation) {
+                // Whole pixels, no anti-aliasing, and the colour replaces
+                // what is there instead of blending with it.
+                let rect =
+                    tiny_skia::Rect::from_ltrb(r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32);
+                if let Some(rect) = rect {
+                    let mut paint = Paint::default();
+                    paint.set_color_rgba8(r.rgb[0], r.rgb[1], r.rgb[2], 255);
+                    paint.anti_alias = false;
+                    paint.blend_mode = tiny_skia::BlendMode::Source;
+                    pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+                }
+            }
+        }
         Annotation::Spotlight { .. } => {
-            // Spotlight rendering is handled in renderer.rs where we have access
-            // to the original screenshot pixmap for restoring bright cutout areas.
+            // See `render_annotations`.
         }
         Annotation::Measurement { start, end, color } => {
             let mut paint = Paint::default();
@@ -789,24 +1004,40 @@ pub fn render_annotation(
     }
 }
 
-/// Measure the rendered width of single-line text using the embedded font's
-/// advance metrics — matches exactly what `render_text_annotation` produces.
+/// Measure the rendered width of text using the fonts' advance metrics —
+/// matches exactly what `render_text_annotation` produces. For text with
+/// several lines this is the width of the longest.
 pub fn measure_text_width(text: &str, font_size: f32) -> f32 {
-    let font = &*crate::font::FONT;
-    text.chars()
-        .map(|ch| font.metrics(ch, font_size).advance_width)
-        .sum()
+    text.split('\n')
+        .map(|line| {
+            line.chars()
+                .map(|ch| crate::font::metrics(ch, font_size).advance_width)
+                .sum::<f32>()
+        })
+        .fold(0.0, f32::max)
 }
 
-/// Measure the line height (ascent + descent) of the embedded font at a size.
+/// Measure the height of one line (ascent + descent) at a size.
 pub fn measure_text_height(font_size: f32) -> f32 {
-    let font = &*crate::font::FONT;
-    font.horizontal_line_metrics(font_size)
-        .map(|m| m.ascent + m.descent.abs())
-        .unwrap_or(font_size)
+    crate::font::text_height(font_size)
 }
 
-/// Rasterize a single-line text annotation onto a pixmap using fontdue.
+/// Distance from the top of one line to the top of the next.
+pub fn text_line_height(font_size: f32) -> f32 {
+    crate::font::line_height(font_size)
+}
+
+/// Width and height of a block of text, which may have several lines.
+pub fn measure_text_block(text: &str, font_size: f32) -> (f32, f32) {
+    let lines = text.split('\n').count().max(1);
+    (
+        measure_text_width(text, font_size),
+        (lines - 1) as f32 * text_line_height(font_size) + measure_text_height(font_size),
+    )
+}
+
+/// Rasterize text onto a pixmap using fontdue. `position` is the top-left
+/// of the first line; a `\n` starts the next line below it.
 pub fn render_text_annotation(
     pixmap: &mut Pixmap,
     position: &Point,
@@ -814,8 +1045,21 @@ pub fn render_text_annotation(
     color: &Color,
     font_size: f32,
 ) {
-    let font = &*crate::font::FONT;
+    let line_height = text_line_height(font_size);
+    for (i, line) in text.split('\n').enumerate() {
+        let top = Point::new(position.x, position.y + i as f32 * line_height);
+        render_text_line(pixmap, &top, line, color, font_size);
+    }
+}
 
+/// One line of `render_text_annotation`.
+fn render_text_line(
+    pixmap: &mut Pixmap,
+    position: &Point,
+    text: &str,
+    color: &Color,
+    font_size: f32,
+) {
     let pw = pixmap.width() as i32;
     let ph = pixmap.height() as i32;
 
@@ -825,16 +1069,14 @@ pub fn render_text_annotation(
     let sa = color.a;
 
     let mut cursor_x = position.x;
-    // Treat click position as the TOP of the text line.
+    // Treat the position as the TOP of the text line.
     // Compute baseline from font metrics: baseline = top + ascent
-    let line_metrics = font.horizontal_line_metrics(font_size);
-    let ascent = line_metrics.map(|m| m.ascent).unwrap_or(font_size * 0.8);
-    let baseline_y = position.y + ascent;
+    let baseline_y = position.y + crate::font::ascent(font_size);
 
     let pixels = pixmap.data_mut();
 
     for ch in text.chars() {
-        let (metrics, bitmap) = font.rasterize(ch, font_size);
+        let (metrics, bitmap) = crate::font::rasterize(ch, font_size);
         if metrics.width == 0 || metrics.height == 0 {
             cursor_x += metrics.advance_width;
             continue;
@@ -960,6 +1202,7 @@ pub fn hit_test_annotation(annotation: &Annotation, point: &Point, threshold: f3
         }
         Annotation::Highlight { top_left, size, .. }
         | Annotation::Pixelate { top_left, size, .. }
+        | Annotation::Redact { top_left, size, .. }
         | Annotation::Spotlight { top_left, size } => {
             point.x >= top_left.x
                 && point.x <= top_left.x + size.width
@@ -977,8 +1220,7 @@ pub fn hit_test_annotation(annotation: &Annotation, point: &Point, threshold: f3
             text,
             ..
         } => {
-            let text_width = measure_text_width(text, *font_size);
-            let text_height = measure_text_height(*font_size);
+            let (text_width, text_height) = measure_text_block(text, *font_size);
             point.x >= position.x - threshold
                 && point.x <= position.x + text_width + threshold
                 && point.y >= position.y - threshold
@@ -1007,6 +1249,7 @@ pub fn move_annotation(annotation: &mut Annotation, dx: f32, dy: f32) {
         | Annotation::RoundedRect { top_left, .. }
         | Annotation::Highlight { top_left, .. }
         | Annotation::Pixelate { top_left, .. }
+        | Annotation::Redact { top_left, .. }
         | Annotation::Spotlight { top_left, .. } => {
             top_left.x += dx;
             top_left.y += dy;
@@ -1040,6 +1283,7 @@ pub fn recolor_annotation(annotation: &mut Annotation, new_color: Color) {
         | Annotation::Highlight { color, .. }
         | Annotation::Text { color, .. }
         | Annotation::StepMarker { color, .. }
+        | Annotation::Redact { color, .. }
         | Annotation::Measurement { color, .. } => {
             *color = new_color;
         }
@@ -1110,6 +1354,7 @@ pub fn resize_annotation(annotation: &mut Annotation, handle: ResizeHandle, new_
             | Annotation::RoundedRect { top_left, size, .. }
             | Annotation::Highlight { top_left, size, .. }
             | Annotation::Pixelate { top_left, size, .. }
+            | Annotation::Redact { top_left, size, .. }
             | Annotation::Spotlight { top_left, size } => {
                 top_left.x = new_x;
                 top_left.y = new_y;
@@ -1147,6 +1392,117 @@ pub fn resize_annotation(annotation: &mut Annotation, handle: ResizeHandle, new_
             }
         }
     }
+}
+
+/// Everywhere an annotation can put a pixel, as (x, y, w, h): its bounding
+/// box and whatever sticks out of it (the stroke, an arrowhead, a
+/// measurement's label). It errs on the large side; the overlay uses it to
+/// know which part of a frame to redraw. `None` for a Spotlight, which
+/// changes the whole image.
+pub fn annotation_reach(annotation: &Annotation) -> Option<(f32, f32, f32, f32)> {
+    let grow =
+        |(x, y, w, h): (f32, f32, f32, f32), by: f32| (x - by, y - by, w + by * 2.0, h + by * 2.0);
+    let span = |a: &Point, b: &Point| {
+        (
+            a.x.min(b.x),
+            a.y.min(b.y),
+            (a.x - b.x).abs(),
+            (a.y - b.y).abs(),
+        )
+    };
+    Some(match annotation {
+        Annotation::Spotlight { .. } => return None,
+        // The head's corners are within four stroke widths of the tip.
+        Annotation::Arrow {
+            start,
+            end,
+            thickness,
+            ..
+        } => grow(span(start, end), 4.0 * thickness + 2.0),
+        Annotation::Line {
+            start,
+            end,
+            thickness,
+            ..
+        } => grow(span(start, end), thickness + 2.0),
+        Annotation::Rectangle {
+            top_left,
+            size,
+            thickness,
+            ..
+        }
+        | Annotation::RoundedRect {
+            top_left,
+            size,
+            thickness,
+            ..
+        } => grow(
+            (top_left.x, top_left.y, size.width, size.height),
+            thickness + 2.0,
+        ),
+        Annotation::Ellipse {
+            center,
+            radius_x,
+            radius_y,
+            thickness,
+            ..
+        } => grow(
+            (
+                center.x - radius_x,
+                center.y - radius_y,
+                radius_x * 2.0,
+                radius_y * 2.0,
+            ),
+            thickness + 2.0,
+        ),
+        Annotation::Pencil {
+            points, thickness, ..
+        } => {
+            let first = points.first()?;
+            let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
+            for p in points {
+                x0 = x0.min(p.x);
+                y0 = y0.min(p.y);
+                x1 = x1.max(p.x);
+                y1 = y1.max(p.y);
+            }
+            // A sharp turn in the stroke has a mitred point up to two
+            // stroke widths long.
+            grow((x0, y0, x1 - x0, y1 - y0), 2.0 * thickness + 2.0)
+        }
+        Annotation::Text {
+            position,
+            text,
+            font_size,
+            ..
+        } => {
+            let (w, h) = measure_text_block(text, *font_size);
+            grow((position.x, position.y, w, h), font_size * 0.5 + 3.0)
+        }
+        Annotation::Highlight { top_left, size, .. }
+        | Annotation::Pixelate { top_left, size, .. }
+        | Annotation::Redact { top_left, size, .. } => {
+            grow((top_left.x, top_left.y, size.width, size.height), 2.0)
+        }
+        Annotation::StepMarker { position, size, .. } => grow(
+            (
+                position.x - size / 2.0,
+                position.y - size / 2.0,
+                *size,
+                *size,
+            ),
+            3.0,
+        ),
+        Annotation::Measurement { start, end, .. } => {
+            // The end caps reach seven pixels either side of the line, and
+            // the distance label sits above its middle.
+            let (x, y, w, h) = grow(span(start, end), 9.0);
+            let (mid_x, mid_y) = ((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
+            let (lx0, ly0, lx1, ly1) = (mid_x - 80.0, mid_y - 20.0, mid_x + 80.0, mid_y + 12.0);
+            let (x0, y0) = (x.min(lx0), y.min(ly0));
+            ((x0), (y0), (x + w).max(lx1) - x0, (y + h).max(ly1) - y0)
+        }
+    })
 }
 
 /// Compute the bounding box of an annotation as (x, y, w, h).
@@ -1195,6 +1551,7 @@ pub fn annotation_bounding_box(annotation: &Annotation) -> Option<(f32, f32, f32
         )),
         Annotation::Highlight { top_left, size, .. }
         | Annotation::Pixelate { top_left, size, .. }
+        | Annotation::Redact { top_left, size, .. }
         | Annotation::Spotlight { top_left, size } => {
             Some((top_left.x, top_left.y, size.width, size.height))
         }
@@ -1228,8 +1585,7 @@ pub fn annotation_bounding_box(annotation: &Annotation) -> Option<(f32, f32, f32
             text,
             ..
         } => {
-            let text_width = measure_text_width(text, *font_size);
-            let text_height = measure_text_height(*font_size);
+            let (text_width, text_height) = measure_text_block(text, *font_size);
             Some((position.x, position.y, text_width, text_height))
         }
         Annotation::StepMarker { position, size, .. } => {

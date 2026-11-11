@@ -1,25 +1,418 @@
+//! Drawing the capture overlay.
+//!
+//! A frame is the background (the capture, dimmed outside the selection
+//! and around any spotlights) with everything else drawn over it:
+//! crosshair, selection border, annotations, toolbar, magnifier. On a 4K
+//! desktop the capture alone is 33 MB, and the pointer
+//! moving is a new frame, so a frame is not drawn from scratch. `Frame`
+//! remembers which areas the last one drew on; the next one puts the
+//! background back in just those areas (and where the selection changed),
+//! draws again, and reports the areas that differ, which is all the window
+//! then has to be given. `render_overlay` draws a whole frame the plain way;
+//! tests check that the two always agree.
+
+use std::num::NonZeroU32;
+
+use crate::capture::CapturedScreen;
 use crate::geometry::Color;
 use crate::icons::blend_pixmap;
 use crate::overlay::selection::Selection;
 use crate::overlay::toolbar::{ButtonAction, Toolbar, BUTTONS};
 use crate::state::OverlayState;
 use crate::tools::{
-    annotation_bounding_box, measure_text_width, render_annotation, Annotation, AnnotationTool,
-    ToolKind,
+    annotation_bounding_box, annotation_reach, draw_annotations, measure_text_height,
+    measure_text_width, spotlights, Annotation, Backdrop, ToolKind,
 };
 use tiny_skia::{Paint, PathBuilder, Stroke, Transform};
 
-/// Render the full overlay frame: screenshot background, dim, selection highlight,
-/// annotations, and toolbar.
+/// A rectangle of whole pixels: `x0 <= x < x1` and `y0 <= y < y1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Area {
+    pub x0: i32,
+    pub y0: i32,
+    pub x1: i32,
+    pub y1: i32,
+}
+
+impl Area {
+    pub fn new(x0: i32, y0: i32, x1: i32, y1: i32) -> Self {
+        Self { x0, y0, x1, y1 }
+    }
+
+    /// Every pixel a rectangle given in fractions of a pixel touches, grown
+    /// by `margin` on each side.
+    pub fn around(x: f32, y: f32, w: f32, h: f32, margin: f32) -> Self {
+        let (x0, x1) = (x.min(x + w), x.max(x + w));
+        let (y0, y1) = (y.min(y + h), y.max(y + h));
+        Self {
+            x0: (x0 - margin).floor() as i32,
+            y0: (y0 - margin).floor() as i32,
+            x1: (x1 + margin).ceil() as i32,
+            y1: (y1 + margin).ceil() as i32,
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.x1 <= self.x0 || self.y1 <= self.y0
+    }
+
+    pub fn width(self) -> i32 {
+        (self.x1 - self.x0).max(0)
+    }
+
+    pub fn height(self) -> i32 {
+        (self.y1 - self.y0).max(0)
+    }
+
+    /// How many pixels it holds.
+    pub fn pixels(self) -> i64 {
+        self.width() as i64 * self.height() as i64
+    }
+
+    /// The part of `self` that is also in `other` (possibly empty).
+    pub fn intersect(self, other: Area) -> Area {
+        Area {
+            x0: self.x0.max(other.x0),
+            y0: self.y0.max(other.y0),
+            x1: self.x1.min(other.x1),
+            y1: self.y1.min(other.y1),
+        }
+    }
+
+    /// True if every pixel of `other` is in `self`.
+    pub fn contains(self, other: Area) -> bool {
+        other.is_empty()
+            || (other.x0 >= self.x0
+                && other.y0 >= self.y0
+                && other.x1 <= self.x1
+                && other.y1 <= self.y1)
+    }
+
+    /// `self` with `hole` cut out of it: up to four areas, none empty.
+    pub fn without(self, hole: Area) -> Vec<Area> {
+        if self.is_empty() {
+            return Vec::new();
+        }
+        let hole = hole.intersect(self);
+        if hole.is_empty() {
+            return vec![self];
+        }
+        [
+            // Above and below the hole, full width; then left and right of it.
+            Area::new(self.x0, self.y0, self.x1, hole.y0),
+            Area::new(self.x0, hole.y1, self.x1, self.y1),
+            Area::new(self.x0, hole.y0, hole.x0, hole.y1),
+            Area::new(hole.x1, hole.y0, self.x1, hole.y1),
+        ]
+        .into_iter()
+        .filter(|a| !a.is_empty())
+        .collect()
+    }
+}
+
+/// What the last frame left in the pixmap, so the next one can change only
+/// what differs. A new or invalidated `Frame` draws everything.
+#[derive(Debug, Default)]
+pub struct Frame {
+    /// False until a frame has been drawn into this pixmap.
+    drawn_once: bool,
+    size: (u32, u32),
+    /// The selection the background was painted for.
+    bright: Area,
+    /// The spotlights the background was painted for.
+    spots: Vec<Area>,
+    /// Where the last frame drew over the background.
+    drawn: Vec<Area>,
+}
+
+impl Frame {
+    /// Draw the next frame from scratch.
+    pub fn invalidate(&mut self) {
+        self.drawn_once = false;
+    }
+}
+
+/// The areas a frame draws on, collected while it is drawn.
+struct Drawn {
+    bounds: Area,
+    areas: Vec<Area>,
+}
+
+impl Drawn {
+    fn add(&mut self, area: Area) {
+        let area = area.intersect(self.bounds);
+        if !area.is_empty() {
+            self.areas.push(area);
+        }
+    }
+}
+
+/// Draw a whole overlay frame: the capture, dimmed outside the selection,
+/// and everything on top of it.
 pub fn render_overlay(state: &mut OverlayState, pixmap: &mut tiny_skia::Pixmap) {
+    render_frame(state, pixmap, &mut Frame::default());
+}
+
+/// Bring `pixmap` from the last frame (as `frame` remembers it) to the
+/// current one, redrawing only what changed. Returns the areas whose pixels
+/// may differ from the last frame; the first time, that is all of it.
+pub fn render_frame(
+    state: &mut OverlayState,
+    pixmap: &mut tiny_skia::Pixmap,
+    frame: &mut Frame,
+) -> Vec<Area> {
+    let size = (pixmap.width(), pixmap.height());
+    let bounds = Area::new(0, 0, size.0 as i32, size.1 as i32);
+    let bright = bright_area(state.selection.as_ref(), bounds);
+
+    // The annotation being drawn right now, or the text being typed.
+    let (typed, _) = state.text_for_display();
+    let preview = if state.text_input_active {
+        (!typed.is_empty()).then_some(Annotation::Text {
+            position: state.text_input_position,
+            text: typed,
+            color: state.current_color,
+            font_size: state.text_input_font_size,
+        })
+    } else {
+        state
+            .tool(state.active_tool)
+            .and_then(|tool| tool.in_progress_annotation())
+    };
+    // Spotlights belong to the background: they change every pixel, but
+    // only when one is added, moved or removed.
+    let spots: Vec<Area> = spotlights(&state.annotations, preview.as_ref())
+        .into_iter()
+        .map(|(x, y, w, h)| {
+            let px = |v: usize| v.min(i32::MAX as usize) as i32;
+            Area::new(
+                px(x),
+                px(y),
+                px(x.saturating_add(w)),
+                px(y.saturating_add(h)),
+            )
+            .intersect(bounds)
+        })
+        .collect();
+
+    // What has to go back to plain background: everything the last frame
+    // drew, and the edges the selection moved over.
+    let from_scratch = !frame.drawn_once || frame.size != size || frame.spots != spots;
+    let mut changed = if from_scratch {
+        vec![bounds]
+    } else {
+        let mut stale = std::mem::take(&mut frame.drawn);
+        stale.extend(frame.bright.without(bright));
+        stale.extend(bright.without(frame.bright));
+        stale
+    };
+    for area in &changed {
+        paint_background(pixmap, &state.screenshot, bright, &spots, *area);
+    }
+
+    // Everything else is drawn over background, old or just put back, so a
+    // translucent toolbar never lands on a copy of itself.
+    let mut drawn = Drawn {
+        bounds,
+        areas: Vec::new(),
+    };
+    draw_elements(state, pixmap, preview.as_ref(), &mut drawn);
+
+    changed.extend(drawn.areas.iter().copied());
+    *frame = Frame {
+        drawn_once: true,
+        size,
+        bright,
+        spots,
+        drawn: drawn.areas,
+    };
+    tidy(changed, bounds)
+}
+
+/// The pixels the selection covers, as the background shows them bright.
+fn bright_area(selection: Option<&Selection>, bounds: Area) -> Area {
+    let Some(sel) = selection else {
+        return Area::default();
+    };
+    // Truncated like a pixel index: -0.5 is pixel 0, 3.9 is pixel 3.
+    let pixel = |v: f32| (v as usize).min(i32::MAX as usize) as i32;
+    Area::new(
+        pixel(sel.x),
+        pixel(sel.y),
+        pixel(sel.x + sel.width),
+        pixel(sel.y + sel.height),
+    )
+    .intersect(bounds)
+}
+
+/// How much of a capture pixel is left outside the selection: 153/256, or
+/// 60 %.
+const DIM: u32 = 153;
+
+/// Paint the background into `area`: the capture as it is inside `bright`,
+/// dimmed everywhere else. With spotlights, all of that is halved again
+/// except inside `spots`, where the capture shows as it is; the same sum
+/// the export does (`tools::render_annotations`), so the two agree.
+///
+/// This is the only place the capture reaches the frame from, so no dimmed
+/// copy of it has to be kept.
+fn paint_background(
+    pixmap: &mut tiny_skia::Pixmap,
+    capture: &CapturedScreen,
+    bright: Area,
+    spots: &[Area],
+    area: Area,
+) {
+    let frame_w = pixmap.width() as usize;
+    let capture_w = capture.width as usize;
+    let capture_h = (capture.pixels.len() / 4)
+        .checked_div(capture_w)
+        .unwrap_or(0)
+        .min(capture.height as usize);
+    let area = area.intersect(Area::new(
+        0,
+        0,
+        frame_w.min(capture_w) as i32,
+        (pixmap.height() as usize).min(capture_h) as i32,
+    ));
+    if area.is_empty() {
+        return;
+    }
+    let (x0, x1) = (area.x0 as usize, area.x1 as usize);
+    // The stretch of each row that is inside the selection, counted from x0.
+    let lit = bright.intersect(area);
+    let (lit0, lit1) = if lit.is_empty() {
+        (0, 0)
+    } else {
+        (lit.x0 as usize - x0, lit.x1 as usize - x0)
+    };
+    let out = pixmap.data_mut();
+    for y in area.y0 as usize..area.y1 as usize {
+        let src = &capture.pixels[(y * capture_w + x0) * 4..(y * capture_w + x1) * 4];
+        let dst = &mut out[(y * frame_w + x0) * 4..(y * frame_w + x1) * 4];
+        let (a, b) = if (lit.y0..lit.y1).contains(&(y as i32)) {
+            (lit0 * 4, lit1 * 4)
+        } else {
+            (0, 0)
+        };
+        dim_into(&mut dst[..a], &src[..a]);
+        // A capture is opaque, so its bytes are already what tiny-skia
+        // keeps (premultiplied) and can be copied as they are.
+        dst[a..b].copy_from_slice(&src[a..b]);
+        dim_into(&mut dst[b..], &src[b..]);
+
+        if spots.is_empty() {
+            continue;
+        }
+        for px in dst.as_chunks_mut::<4>().0 {
+            let pixel = u32::from_le_bytes(*px);
+            *px = (((pixel >> 1) & 0x007f_7f7f) | 0xff00_0000).to_le_bytes();
+        }
+        let row = Area::new(area.x0, y as i32, area.x1, y as i32 + 1);
+        for spot in spots {
+            let lit = spot.intersect(row);
+            if !lit.is_empty() {
+                let (from, to) = ((lit.x0 as usize - x0) * 4, (lit.x1 as usize - x0) * 4);
+                dst[from..to].copy_from_slice(&src[from..to]);
+            }
+        }
+    }
+}
+
+/// `src` at 60 % brightness, opaque. A whole pixel at a time (red and blue
+/// in one multiplication, green in another), which the compiler turns into
+/// vector code; this runs over the whole desktop for a frame from scratch.
+fn dim_into(dst: &mut [u8], src: &[u8]) {
+    for (d, s) in dst
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<4>().0)
+    {
+        let pixel = u32::from_le_bytes(*s);
+        let red_blue = (((pixel & 0x00ff_00ff) * DIM) >> 8) & 0x00ff_00ff;
+        let green = (((pixel & 0x0000_ff00) * DIM) >> 8) & 0x0000_ff00;
+        *d = (red_blue | green | 0xff00_0000).to_le_bytes();
+    }
+}
+
+/// Clip a list of changed areas to the frame, drop the ones inside others,
+/// and fall back to the whole frame when the list no longer saves anything.
+fn tidy(areas: Vec<Area>, bounds: Area) -> Vec<Area> {
+    let mut kept: Vec<Area> = Vec::with_capacity(areas.len());
+    for area in areas {
+        let area = area.intersect(bounds);
+        if area.is_empty() || kept.iter().any(|k| k.contains(area)) {
+            continue;
+        }
+        kept.retain(|k| !area.contains(*k));
+        kept.push(area);
+    }
+    let total: i64 = kept.iter().map(|a| a.pixels()).sum();
+    if total >= bounds.pixels() || kept.len() > 96 {
+        return vec![bounds];
+    }
+    kept
+}
+
+/// Copy the changed areas of a frame into a window's buffer, which holds one
+/// `0x00RRGGBB` word per pixel in rows of `stride`. Returns those areas as
+/// the window wants to be told about them.
+///
+/// The overlay is opaque (it is drawn over an opaque capture), so the bytes
+/// tiny-skia keeps are the colours themselves.
+pub fn to_window_pixels(
+    pixmap: &tiny_skia::Pixmap,
+    out: &mut [u32],
+    stride: usize,
+    areas: &[Area],
+) -> Vec<softbuffer::Rect> {
+    let rows = out.len().checked_div(stride).unwrap_or(0);
+    let frame_stride = pixmap.width() as usize * 4;
+    let bounds = Area::new(
+        0,
+        0,
+        (pixmap.width() as usize).min(stride) as i32,
+        (pixmap.height() as usize).min(rows) as i32,
+    );
+    let src = pixmap.data();
+    let mut told = Vec::with_capacity(areas.len());
+    for area in areas {
+        let area = area.intersect(bounds);
+        let (Some(w), Some(h)) = (
+            NonZeroU32::new(area.width() as u32),
+            NonZeroU32::new(area.height() as u32),
+        ) else {
+            continue;
+        };
+        let (x0, x1) = (area.x0 as usize, area.x1 as usize);
+        for y in area.y0 as usize..area.y1 as usize {
+            let from = &src[y * frame_stride + x0 * 4..y * frame_stride + x1 * 4];
+            let to = &mut out[y * stride + x0..y * stride + x1];
+            for (word, rgba) in to.iter_mut().zip(from.as_chunks::<4>().0) {
+                *word = u32::from_be_bytes([0, rgba[0], rgba[1], rgba[2]]);
+            }
+        }
+        told.push(softbuffer::Rect {
+            x: area.x0 as u32,
+            y: area.y0 as u32,
+            width: w,
+            height: h,
+        });
+    }
+    told
+}
+
+/// Draw everything that goes over the background, noting where. `preview`
+/// is the annotation being drawn right now, if any.
+fn draw_elements(
+    state: &mut OverlayState,
+    pixmap: &mut tiny_skia::Pixmap,
+    preview: Option<&Annotation>,
+    drawn: &mut Drawn,
+) {
     let width = pixmap.width() as usize;
     let height = pixmap.height() as usize;
-
-    // 1+2. Bulk copy pre-computed dimmed screenshot (fast memcpy, done once at capture time)
-    let dimmed_data = state.dimmed_pixmap.data();
-    let pixmap_data = pixmap.data_mut();
-    let copy_len = dimmed_data.len().min(pixmap_data.len());
-    pixmap_data[..copy_len].copy_from_slice(&dimmed_data[..copy_len]);
 
     // 2b. Crosshair guide lines through cursor for precise alignment
     let show_crosshair = state.selection.is_none() || state.is_selecting;
@@ -52,33 +445,13 @@ pub fn render_overlay(state: &mut OverlayState, pixmap: &mut tiny_skia::Pixmap) 
         if let Some(path) = pb.finish() {
             pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
         }
+        drawn.add(Area::around(mx, 0.0, 0.0, ph, 2.0));
+        drawn.add(Area::around(0.0, my, pw, 0.0, 2.0));
     }
 
-    // 3. If selection exists, restore brightness by copying from cached screenshot pixmap
+    // 3. (The selection is bright because the background was painted so.)
     if let Some(sel) = &state.selection {
-        let src_w = state.screenshot_pixmap.width() as usize;
-        let sx = (sel.x as usize).min(width);
-        let sy = (sel.y as usize).min(height);
-        let sx2 = ((sel.x + sel.width) as usize).min(width).min(src_w);
-        let sy2 = ((sel.y + sel.height) as usize).min(height);
-        let row_bytes = (sx2.saturating_sub(sx)) * 4; // 4 bytes per pixel
-
-        if row_bytes > 0 {
-            let screenshot_data = state.screenshot_pixmap.data();
-            let pixmap_data = pixmap.data_mut();
-            for y in sy..sy2 {
-                let src_offset = (y * src_w + sx) * 4;
-                let dst_offset = (y * width + sx) * 4;
-                if src_offset + row_bytes <= screenshot_data.len()
-                    && dst_offset + row_bytes <= pixmap_data.len()
-                {
-                    pixmap_data[dst_offset..dst_offset + row_bytes]
-                        .copy_from_slice(&screenshot_data[src_offset..src_offset + row_bytes]);
-                }
-            }
-        }
-
-        // 4. Selection border — white 1px stroke
+        // 4. Selection border
         if let Some(rect) = tiny_skia::Rect::from_xywh(sel.x, sel.y, sel.width, sel.height) {
             let path = PathBuilder::from_rect(rect);
             let mut paint = Paint::default();
@@ -89,104 +462,33 @@ pub fn render_overlay(state: &mut OverlayState, pixmap: &mut tiny_skia::Pixmap) 
                 ..Stroke::default()
             };
             pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            // Its four edges, not the rectangle: nothing is drawn inside.
+            let (x, y, w, h) = (sel.x, sel.y, sel.width, sel.height);
+            drawn.add(Area::around(x, y, w, 0.0, 3.0));
+            drawn.add(Area::around(x, y + h, w, 0.0, 3.0));
+            drawn.add(Area::around(x, y, 0.0, h, 3.0));
+            drawn.add(Area::around(x + w, y, 0.0, h, 3.0));
         }
 
         // 4b. Selection size label
-        render_size_label(pixmap, sel, width as f32, height as f32);
+        drawn.add(render_size_label(pixmap, sel, width as f32, height as f32));
     }
 
-    // 5. Finalized annotations
-    let ss_pixels = Some(state.screenshot.pixels.as_slice());
-    let ss_width = Some(state.screenshot.width);
-    for annotation in &state.annotations {
-        render_annotation(annotation, pixmap, ss_pixels, ss_width);
-    }
-
-    // 6. In-progress annotation preview
-    let in_progress = match state.active_tool {
-        ToolKind::Select => None,
-        ToolKind::Arrow => state.arrow_tool.in_progress_annotation(),
-        ToolKind::Rectangle => state.rectangle_tool.in_progress_annotation(),
-        ToolKind::Circle => state.circle_tool.in_progress_annotation(),
-        ToolKind::Line => state.line_tool.in_progress_annotation(),
-        ToolKind::Pencil => state.pencil_tool.in_progress_annotation(),
-        ToolKind::Highlight => state.highlight_tool.in_progress_annotation(),
-        ToolKind::Text => state.text_tool.in_progress_annotation(),
-        ToolKind::Pixelate => state.pixelate_tool.in_progress_annotation(),
-        ToolKind::StepMarker => state.step_marker_tool.in_progress_annotation(),
-        ToolKind::Eyedropper => None,
-        ToolKind::RoundedRect => state.rounded_rect_tool.in_progress_annotation(),
-        ToolKind::Spotlight => state.spotlight_tool.in_progress_annotation(),
-        ToolKind::Measurement => state.measurement_tool.in_progress_annotation(),
-    };
-    if let Some(ref ann) = in_progress {
-        render_annotation(ann, pixmap, ss_pixels, ss_width);
-    }
-
-    // 6a. Spotlight effect — dim everything outside spotlight rectangles
-    {
-        let mut spotlights: Vec<(crate::geometry::Point, crate::geometry::Size)> = state
-            .annotations
-            .iter()
-            .filter_map(|a| match a {
-                Annotation::Spotlight { top_left, size } => Some((*top_left, *size)),
-                _ => None,
-            })
-            .collect();
-        // Include in-progress spotlight
-        if let Some(Annotation::Spotlight { top_left, size }) = in_progress.as_ref() {
-            spotlights.push((*top_left, *size));
-        }
-        if !spotlights.is_empty() {
-            // Dim the entire pixmap with 50% black overlay
-            let pw = pixmap.width() as f32;
-            let ph = pixmap.height() as f32;
-            if let Some(r) = tiny_skia::Rect::from_xywh(0.0, 0.0, pw, ph) {
-                let mut dim = Paint::default();
-                dim.set_color(tiny_skia::Color::from_rgba(0.0, 0.0, 0.0, 0.5).unwrap());
-                dim.anti_alias = false;
-                pixmap.fill_rect(r, &dim, Transform::identity(), None);
-            }
-
-            // Restore the bright areas (spotlight cutouts) from screenshot_pixmap
-            let src_w = state.screenshot_pixmap.width();
-            let screenshot_data = state.screenshot_pixmap.data();
-            for (tl, sz) in &spotlights {
-                // Shrink the region when the origin is clamped so the cutout
-                // matches the annotation rect instead of extending right/down.
-                let sw = (sz.width + tl.x.min(0.0)).max(0.0) as u32;
-                let sh = (sz.height + tl.y.min(0.0)).max(0.0) as u32;
-                let sx = tl.x.max(0.0) as u32;
-                let sy = tl.y.max(0.0) as u32;
-                let pm_w = pixmap.width();
-                let pm_h = pixmap.height();
-                let pixmap_data = pixmap.data_mut();
-                for y in sy..(sy + sh).min(pm_h) {
-                    let row_start = ((y * src_w + sx) * 4) as usize;
-                    let copy_w = sw
-                        .min(src_w.saturating_sub(sx))
-                        .min(pm_w.saturating_sub(sx));
-                    let row_end = row_start + (copy_w * 4) as usize;
-                    let dst_start = ((y * pm_w + sx) * 4) as usize;
-                    let dst_end = dst_start + (copy_w * 4) as usize;
-                    if row_end <= screenshot_data.len() && dst_end <= pixmap_data.len() {
-                        pixmap_data[dst_start..dst_end]
-                            .copy_from_slice(&screenshot_data[row_start..row_end]);
-                    }
-                }
-            }
-
-            // Re-draw non-spotlight annotations so they remain visible over dimmed areas
-            for ann in &state.annotations {
-                if !matches!(ann, Annotation::Spotlight { .. }) {
-                    render_annotation(ann, pixmap, ss_pixels, ss_width);
-                }
-            }
-            if let Some(ref ann) = in_progress {
-                if !matches!(ann, Annotation::Spotlight { .. }) {
-                    render_annotation(ann, pixmap, ss_pixels, ss_width);
-                }
-            }
+    // 5. Annotations, plus the one being drawn or the text being typed,
+    //    with the code the export draws them with. (A spotlight draws
+    //    nothing here: its dimming is already in the background.)
+    draw_annotations(
+        &state.annotations,
+        preview,
+        pixmap,
+        Backdrop {
+            pixels: &state.screenshot.pixels,
+            width: state.screenshot.width,
+        },
+    );
+    for annotation in state.annotations.iter().chain(preview) {
+        if let Some((x, y, w, h)) = annotation_reach(annotation) {
+            drawn.add(Area::around(x, y, w, h, 1.0));
         }
     }
 
@@ -195,44 +497,50 @@ pub fn render_overlay(state: &mut OverlayState, pixmap: &mut tiny_skia::Pixmap) 
         if let Some(ann) = state.annotations.get(idx) {
             if let Some((bx, by, bw, bh)) = annotation_bounding_box(ann) {
                 render_selection_highlight(pixmap, bx - 4.0, by - 4.0, bw + 8.0, bh + 8.0);
+                // The dashed box, and the corner handles that straddle it.
+                drawn.add(Area::around(bx - 4.0, by - 4.0, bw + 8.0, bh + 8.0, 7.0));
             }
         }
     }
 
-    // 7. Text input preview (in-progress text being typed)
-    if state.text_input_active && !state.text_input_buffer.is_empty() {
-        let preview = Annotation::Text {
-            position: state.text_input_position,
-            text: state.text_input_buffer.clone(),
-            color: state.current_color,
-            font_size: state.text_input_font_size,
+    // 7. The caret, in the text's own colour so it shows on any background,
+    //    and a line under text an input method is still composing.
+    if let Some((cx, cy, ch)) = state.text_caret_rect() {
+        let mut paint = Paint::default();
+        paint.set_color(state.current_color.into());
+        paint.anti_alias = true;
+        let mut line = |x0: f32, y0: f32, x1: f32, y1: f32, width: f32| {
+            let mut pb = PathBuilder::new();
+            pb.move_to(x0, y0);
+            pb.line_to(x1, y1);
+            if let Some(path) = pb.finish() {
+                let stroke = Stroke {
+                    width,
+                    ..Stroke::default()
+                };
+                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            }
         };
-        render_annotation(&preview, pixmap, ss_pixels, ss_width);
-    }
-    // Text cursor (vertical white line after text)
-    if state.text_input_active {
-        let cursor_x = state.text_input_position.x
-            + measure_text_width(&state.text_input_buffer, state.text_input_font_size);
-        let cursor_y = state.text_input_position.y;
-        let cursor_h = state.text_input_font_size;
-        let mut pb = PathBuilder::new();
-        pb.move_to(cursor_x, cursor_y);
-        pb.line_to(cursor_x, cursor_y + cursor_h);
-        if let Some(path) = pb.finish() {
-            let mut paint = Paint::default();
-            paint.set_color(tiny_skia::Color::WHITE);
-            paint.anti_alias = true;
-            let stroke = Stroke {
-                width: 1.5,
-                ..Stroke::default()
-            };
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        line(cx, cy, cx, cy + ch, 1.5);
+        let (mut left, mut bottom) = (cx, cy + ch);
+        if !state.text_preedit.is_empty() {
+            let size = state.text_input_font_size;
+            let w = measure_text_width(&state.text_preedit, size);
+            let y = cy + measure_text_height(size) + 1.0;
+            line(cx - w, y, cx, y, 1.0);
+            (left, bottom) = (cx - w, bottom.max(y));
         }
+        drawn.add(Area::around(left, cy, cx - left, bottom - cy, 3.0));
     }
 
     // 8. Toolbar (only if there is a selection)
     if let Some(sel) = state.selection {
-        render_toolbar(state, &sel, pixmap);
+        render_toolbar(state, &sel, pixmap, drawn);
+    }
+
+    // 8b. Magnifier, while a region is being placed, dragged out or resized
+    if state.magnifier_visible() {
+        drawn.add(render_magnifier(state, pixmap));
     }
 
     // 9. Eyedropper preview (color swatch + hex near cursor)
@@ -301,6 +609,14 @@ pub fn render_overlay(state: &mut OverlayState, pixmap: &mut tiny_skia::Pixmap) 
             let text_pos = crate::geometry::Point::new(pill_x + pad_x, pill_y + pad_y);
             let white = crate::theme::gcolor(crate::theme::text_normal(), 1.0);
             render_text_annotation(pixmap, &text_pos, &hex, &white, font_size);
+            // The swatch and the label under it.
+            drawn.add(Area::around(
+                swatch_x,
+                swatch_y,
+                swatch_size.max(pill_w),
+                swatch_size + 2.0 + pill_h,
+                4.0,
+            ));
         }
     }
 
@@ -345,7 +661,136 @@ pub fn render_overlay(state: &mut OverlayState, pixmap: &mut tiny_skia::Pixmap) 
         let text_pos = crate::geometry::Point::new(toast_x + pad_x, toast_y + pad_y);
         let text_color = crate::theme::gcolor(crate::theme::text_normal(), 1.0);
         render_text_annotation(pixmap, &text_pos, msg, &text_color, font_size);
+        drawn.add(Area::around(toast_x, toast_y, toast_w, toast_h, 4.0));
     }
+}
+
+/// Capture pixels shown along each side of the magnifier (odd, so one is
+/// in the middle), and how many times larger each is drawn.
+const MAGNIFIER_CELLS: i32 = 15;
+const MAGNIFIER_ZOOM: i32 = 8;
+
+/// A magnified view of the capture around the pointer, with the pixel under
+/// it outlined and its screen position underneath, so a region can start
+/// and end on an exact pixel. It is part of the overlay only, never of
+/// what is copied or saved. Returns the area it covers.
+fn render_magnifier(state: &OverlayState, pixmap: &mut tiny_skia::Pixmap) -> Area {
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+    let size = MAGNIFIER_CELLS * MAGNIFIER_ZOOM;
+    let half = MAGNIFIER_CELLS / 2;
+    let label_h = 22;
+    let gap = 24;
+    let mx = state.last_mouse_pos.x.floor() as i32;
+    let my = state.last_mouse_pos.y.floor() as i32;
+
+    // Below and to the right of the pointer; on the other side near an edge.
+    let mut x = mx + gap;
+    if x + size + 2 > pw {
+        x = mx - gap - size;
+    }
+    let mut y = my + gap;
+    if y + size + label_h + 2 > ph {
+        y = my - gap - size - label_h;
+    }
+    let x = x.clamp(1, (pw - size - 1).max(1));
+    let y = y.clamp(1, (ph - size - label_h - 1).max(1));
+
+    // The capture's own pixels (not the dimmed ones on screen), enlarged.
+    let src = &state.screenshot.pixels;
+    let sw = state.screenshot.width as i32;
+    let sh = state.screenshot.height as i32;
+    let off_capture = crate::theme::bg_1();
+    let out = pixmap.data_mut();
+    for row in 0..size {
+        let py = y + row;
+        if py < 0 || py >= ph {
+            continue;
+        }
+        let sy = my - half + row / MAGNIFIER_ZOOM;
+        for col in 0..size {
+            let px = x + col;
+            if px < 0 || px >= pw {
+                continue;
+            }
+            let sx = mx - half + col / MAGNIFIER_ZOOM;
+            let rgb = (sx >= 0 && sy >= 0 && sx < sw && sy < sh)
+                .then(|| ((sy * sw + sx) * 4) as usize)
+                .and_then(|i| src.get(i..i + 3))
+                .map_or([off_capture.0, off_capture.1, off_capture.2], |p| {
+                    [p[0], p[1], p[2]]
+                });
+            let o = ((py * pw + px) * 4) as usize;
+            if let Some(dst) = out.get_mut(o..o + 4) {
+                dst.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            }
+        }
+    }
+
+    // A one-pixel square outline just outside (x, y, side, side).
+    let outline = |pixmap: &mut tiny_skia::Pixmap, x: i32, y: i32, side: i32, color| {
+        let mut paint = Paint::default();
+        paint.set_color(color);
+        paint.anti_alias = false;
+        let (x, y, side) = (x as f32, y as f32, side as f32);
+        for (rx, ry, rw, rh) in [
+            (x - 1.0, y - 1.0, side + 2.0, 1.0),
+            (x - 1.0, y + side, side + 2.0, 1.0),
+            (x - 1.0, y, 1.0, side),
+            (x + side, y, 1.0, side),
+        ] {
+            if let Some(rect) = tiny_skia::Rect::from_xywh(rx, ry, rw, rh) {
+                pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+            }
+        }
+    };
+    // The pixel under the pointer, then the frame: accent with a dark line
+    // outside it, so both show on any colour.
+    let cx = x + half * MAGNIFIER_ZOOM;
+    let cy = y + half * MAGNIFIER_ZOOM;
+    let dark = tiny_skia::Color::from_rgba8(0, 0, 0, 200);
+    let accent = crate::theme::skia(crate::theme::accent(), 1.0);
+    outline(pixmap, cx - 1, cy - 1, MAGNIFIER_ZOOM + 2, dark);
+    outline(pixmap, cx, cy, MAGNIFIER_ZOOM, accent);
+    outline(pixmap, x - 1, y - 1, size + 2, dark);
+    outline(pixmap, x, y, size, accent);
+
+    // The pointer's position on the screen (not in the capture: with a
+    // monitor to the left of the main one these differ).
+    let label = format!(
+        "{}, {}",
+        mx + state.screenshot.x_offset,
+        my + state.screenshot.y_offset
+    );
+    let font_size = 12.0;
+    let pill_w = measure_text_width(&label, font_size) + 12.0;
+    let pill_y = (y + size + 3) as f32;
+    if let Some(pill) = rounded_rect_path(x as f32, pill_y, pill_w, 18.0, 4.0) {
+        let mut paint = Paint::default();
+        paint.set_color(crate::theme::skia(crate::theme::bg_1(), 0.9));
+        paint.anti_alias = true;
+        pixmap.fill_path(
+            &pill,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    crate::tools::render_text_annotation(
+        pixmap,
+        &crate::geometry::Point::new(x as f32 + 6.0, pill_y + 2.0),
+        &label,
+        &crate::theme::gcolor(crate::theme::text_normal(), 1.0),
+        font_size,
+    );
+    // The frame's two outlines, the pixels, and the label under them.
+    Area::new(
+        x - 3,
+        y - 3,
+        x + size.max(pill_w.ceil() as i32) + 4,
+        y + size + label_h + 4,
+    )
 }
 
 /// Build a rounded rectangle path with given corner radius.
@@ -418,11 +863,24 @@ fn render_selection_highlight(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w:
     }
 }
 
-fn render_toolbar(state: &mut OverlayState, selection: &Selection, pixmap: &mut tiny_skia::Pixmap) {
+fn render_toolbar(
+    state: &mut OverlayState,
+    selection: &Selection,
+    pixmap: &mut tiny_skia::Pixmap,
+    drawn: &mut Drawn,
+) {
     let visible = &state.visible_buttons;
     let visible_count = visible.len();
     let toolbar = Toolbar::position_for_dynamic(selection, pixmap.height() as f32, visible_count);
     let presets = Color::presets();
+    // The bar and the shadow that sits a pixel right of it and two below.
+    drawn.add(Area::around(
+        toolbar.x,
+        toolbar.y,
+        toolbar.width + 1.0,
+        toolbar.height + 2.0,
+        3.0,
+    ));
 
     // --- Toolbar background: rounded rect with subtle border ---
     if let Some(bg_path) =
@@ -475,57 +933,33 @@ fn render_toolbar(state: &mut OverlayState, selection: &Selection, pixmap: &mut 
         );
     }
 
-    // --- Separators between button groups (tools | colors | actions) ---
-    // Find the visible positions where group boundaries occur (after last tool, after last color)
+    // --- Separators between button groups (tools | colours | actions) ---
+    let group = |button: usize| {
+        BUTTONS.get(button).map(|def| match def.action {
+            ButtonAction::Tool(_) => 0,
+            ButtonAction::Color(_) => 1,
+            _ => 2,
+        })
+    };
     let sep_color = crate::theme::skia(crate::theme::text_normal(), 0.15);
-    // Separator after the last tool button (orig 0-13) before colors (orig 14)
-    // and after the last color button (orig 18) before actions (orig 19)
-    let sep_after_orig = [13usize, 18];
-    for &boundary in &sep_after_orig {
-        // Find the visible index of this boundary button
-        if let Some(vis_idx) = visible.iter().position(|&orig| orig == boundary) {
-            let (bx, _, bw, _) = toolbar.button_rect(vis_idx);
-            let sep_x = bx + bw + TOOLBAR_PADDING / 2.0;
-            let sep_y1 = toolbar.y + 8.0;
-            let sep_y2 = toolbar.y + toolbar.height - 8.0;
-            let mut pb = PathBuilder::new();
-            pb.move_to(sep_x, sep_y1);
-            pb.line_to(sep_x, sep_y2);
-            if let Some(path) = pb.finish() {
-                let mut paint = Paint::default();
-                paint.set_color(sep_color);
-                paint.anti_alias = true;
-                let stroke = Stroke {
-                    width: 1.0,
-                    ..Stroke::default()
-                };
-                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-            }
-        } else if boundary == 13 {
-            // If button 13 is hidden, find the last visible tool button (0-13)
-            // and draw separator after it
-            if let Some(vis_idx) = visible.iter().rposition(|&orig| orig <= 13) {
-                // Only draw if there's actually a color/action after it
-                if vis_idx + 1 < visible_count {
-                    let (bx, _, bw, _) = toolbar.button_rect(vis_idx);
-                    let sep_x = bx + bw + TOOLBAR_PADDING / 2.0;
-                    let sep_y1 = toolbar.y + 8.0;
-                    let sep_y2 = toolbar.y + toolbar.height - 8.0;
-                    let mut pb = PathBuilder::new();
-                    pb.move_to(sep_x, sep_y1);
-                    pb.line_to(sep_x, sep_y2);
-                    if let Some(path) = pb.finish() {
-                        let mut paint = Paint::default();
-                        paint.set_color(sep_color);
-                        paint.anti_alias = true;
-                        let stroke = Stroke {
-                            width: 1.0,
-                            ..Stroke::default()
-                        };
-                        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-                    }
-                }
-            }
+    for (vis_idx, pair) in visible.windows(2).enumerate() {
+        if group(pair[0]) == group(pair[1]) {
+            continue;
+        }
+        let (bx, _, bw, _) = toolbar.button_rect(vis_idx);
+        let sep_x = bx + bw + TOOLBAR_PADDING / 2.0;
+        let mut pb = PathBuilder::new();
+        pb.move_to(sep_x, toolbar.y + 8.0);
+        pb.line_to(sep_x, toolbar.y + toolbar.height - 8.0);
+        if let Some(path) = pb.finish() {
+            let mut paint = Paint::default();
+            paint.set_color(sep_color);
+            paint.anti_alias = true;
+            let stroke = Stroke {
+                width: 1.0,
+                ..Stroke::default()
+            };
+            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
         }
     }
 
@@ -698,6 +1132,7 @@ fn render_toolbar(state: &mut OverlayState, selection: &Selection, pixmap: &mut 
             let text_pos = crate::geometry::Point::new(tip_x + pad_x, tip_y + pad_y);
             let white = crate::theme::gcolor(crate::theme::text_normal(), 1.0);
             render_text_annotation(pixmap, &text_pos, label, &white, font_size);
+            drawn.add(Area::around(tip_x, tip_y, tip_w, tip_h, 4.0));
         }
     }
 }
@@ -711,7 +1146,7 @@ fn render_size_label(
     sel: &Selection,
     screen_w: f32,
     screen_h: f32,
-) {
+) -> Area {
     let font_size = 14.0;
 
     let label = format!("{} \u{00D7} {}", sel.width as u32, sel.height as u32);
@@ -763,4 +1198,5 @@ fn render_size_label(
     let text_pos = crate::geometry::Point::new(pill_x + pad_x, pill_y + pad_y);
     let white = crate::theme::gcolor(crate::theme::text_normal(), 1.0);
     render_text_annotation(pixmap, &text_pos, &label, &white, font_size);
+    Area::around(pill_x, pill_y, pill_w, pill_h, 4.0)
 }

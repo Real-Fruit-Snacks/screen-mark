@@ -11,7 +11,7 @@ the rest. On Nightshift the stage sits on `--rfs-surface` so the dim visibly dar
 ends on a hairline. Visitors can
 drag their own selection and draw on the page with the app's keys. Everything below the first screen is plain,
 specific and set like a well-made manual. The visitor should leave knowing the three hotkeys and the
-fourteen tool keys, and having already used the overlay once.
+fifteen tool keys, and having already used the overlay once.
 
 ## Audience and primary action
 Windows users (and some Linux/X11 users) who take screenshots for tickets, docs and chat, and are tired
@@ -73,7 +73,7 @@ Sections are separated by space and a hairline, never by tinted bands.
 
 ## Signature
 1. The first screen is under the real capture overlay, and it works.
-2. The QWERTY diagram with only the fourteen tool keys lit. The lit keys are buttons: click or tap one,
+2. The QWERTY diagram with only the fifteen tool keys lit. The lit keys are buttons: click or tap one,
    or press its letter while focus is in the diagram, and it lights up and switches the tool on the
    first screen. A caption under it names the current tool.
 

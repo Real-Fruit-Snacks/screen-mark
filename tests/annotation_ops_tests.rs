@@ -337,6 +337,7 @@ fn recolor_all_colored_types() {
             | Annotation::Pencil { color, .. }
             | Annotation::Text { color, .. }
             | Annotation::StepMarker { color, .. }
+            | Annotation::Redact { color, .. }
             | Annotation::Measurement { color, .. } => *color,
             Annotation::Pixelate { .. } | Annotation::Spotlight { .. } => unreachable!(),
         };

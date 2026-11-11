@@ -3,31 +3,83 @@
 //! A pin shows a captured selection in a borderless floating window framed by
 //! a themed border. Drag to move, middle-click to copy, right-click to
 //! reveal the backing temp file, Escape or close to dismiss.
+//!
+//! The border and shadow are only how the pin looks on screen. What a
+//! middle-click copies, and the temp file a right-click reveals, is the
+//! capture itself.
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use notify_rust::Notification;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Window, WindowAttributes, WindowId, WindowLevel};
-
-use crate::export;
 
 /// Border thickness for pinned windows (themed frame)
 const PIN_BORDER: u32 = 3;
 /// Shadow offset for pinned windows
 const PIN_SHADOW: u32 = 2;
 
+/// What the app should do after a pin handled an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinEvent {
+    Nothing,
+    /// Escape or the window's close button.
+    Close,
+    /// Middle-click: copy `PinnedWindow::image` and report it like any
+    /// other copy, so the `notifications` setting applies.
+    Copy,
+}
+
+/// `image` (RGBA8, `w` x `h`) with the pin's border and shadow drawn around
+/// it. Returns the framed pixels and their size.
+pub fn frame(image: &[u8], w: u32, h: u32, accent: (u8, u8, u8)) -> (Vec<u8>, u32, u32) {
+    let border = PIN_BORDER;
+    let shadow = PIN_SHADOW;
+    let total_w = w + border * 2 + shadow;
+    let total_h = h + border * 2 + shadow;
+    let mut out = vec![0u8; total_w as usize * total_h as usize * 4];
+    let stride = total_w as usize * 4;
+
+    // Shadow (dark in both themes, offset bottom-right), then the border.
+    for y in shadow..total_h {
+        for x in shadow..total_w {
+            let i = y as usize * stride + x as usize * 4;
+            out[i + 3] = 100;
+        }
+    }
+    let (r, g, b) = accent;
+    for y in 0..total_h - shadow {
+        for x in 0..total_w - shadow {
+            let i = y as usize * stride + x as usize * 4;
+            out[i..i + 4].copy_from_slice(&[r, g, b, 255]);
+        }
+    }
+    // The capture inside the border.
+    let row = w as usize * 4;
+    for y in 0..h as usize {
+        let src = y * row;
+        let dst = (y + border as usize) * stride + border as usize * 4;
+        if let Some(line) = image.get(src..src + row) {
+            out[dst..dst + row].copy_from_slice(line);
+        }
+    }
+    (out, total_w, total_h)
+}
+
 pub struct PinnedWindow {
     window: Arc<Window>,
     surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
-    /// RGBA pixels of the pinned image (includes border + shadow frame).
+    /// What the window shows: the capture inside its border and shadow.
     pixels: Vec<u8>,
     width: u32,
     height: u32,
+    /// The capture itself (RGBA8), as copied and as written to `temp_path`.
+    image: Vec<u8>,
+    image_w: u32,
+    image_h: u32,
     dragging: bool,
     drag_start: Option<winit::dpi::PhysicalPosition<f64>>,
     temp_path: Option<PathBuf>,
@@ -53,54 +105,16 @@ impl PinnedWindow {
         screen_x: i32,
         screen_y: i32,
     ) -> Option<Self> {
-        let border = PIN_BORDER;
-        let shadow = PIN_SHADOW;
-        let total_w = img_w + border * 2 + shadow;
-        let total_h = img_h + border * 2 + shadow;
-
-        // Build the framed pixel buffer
-        let mut framed = vec![0u8; (total_w * total_h * 4) as usize];
-
-        // Shadow fill (dark in both themes, offset bottom-right)
-        for y in shadow..total_h {
-            for x in shadow..total_w {
-                let i = ((y * total_w + x) * 4) as usize;
-                if i + 3 < framed.len() {
-                    framed[i] = 0;
-                    framed[i + 1] = 0;
-                    framed[i + 2] = 0;
-                    framed[i + 3] = 100; // semi-transparent (visible in the saved PNG)
-                }
-            }
+        let expected = img_w as usize * img_h as usize * 4;
+        if img_w == 0 || img_h == 0 || pixels.len() < expected {
+            tracing::error!("Nothing to pin ({img_w}x{img_h}, {} bytes)", pixels.len());
+            return None;
         }
+        let image = pixels[..expected].to_vec();
+        let (framed, total_w, total_h) = frame(&image, img_w, img_h, crate::theme::accent());
 
-        // Border fill (theme accent)
-        let (bd_r, bd_g, bd_b) = crate::theme::accent();
-        for y in 0..total_h - shadow {
-            for x in 0..total_w - shadow {
-                let i = ((y * total_w + x) * 4) as usize;
-                if i + 3 < framed.len() {
-                    framed[i] = bd_r; // theme accent R
-                    framed[i + 1] = bd_g;
-                    framed[i + 2] = bd_b;
-                    framed[i + 3] = 255;
-                }
-            }
-        }
-
-        // Copy the actual image inside the border
-        for y in 0..img_h {
-            for x in 0..img_w {
-                let src = ((y * img_w + x) * 4) as usize;
-                let dst = (((y + border) * total_w + x + border) * 4) as usize;
-                if src + 3 < pixels.len() && dst + 3 < framed.len() {
-                    framed[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
-                }
-            }
-        }
-
-        let pin_x = screen_x - border as i32;
-        let pin_y = screen_y - border as i32;
+        let pin_x = screen_x - PIN_BORDER as i32;
+        let pin_y = screen_y - PIN_BORDER as i32;
 
         let attrs = WindowAttributes::default()
             .with_title("screen-mark Pin")
@@ -133,7 +147,7 @@ impl PinnedWindow {
             }
         };
 
-        // Save the pin image to a temp file for drag-and-drop / reveal support
+        // Save the capture to a temp file for drag-and-drop / reveal support
         let temp_path = {
             let temp_dir = std::env::temp_dir();
             let ts = std::time::SystemTime::now()
@@ -141,7 +155,7 @@ impl PinnedWindow {
                 .unwrap_or_default()
                 .as_millis();
             let path = temp_dir.join(format!("screen-mark_pin_{ts}.png"));
-            image::RgbaImage::from_raw(total_w, total_h, framed.clone()).and_then(|img| {
+            image::RgbaImage::from_raw(img_w, img_h, image.clone()).and_then(|img| {
                 match img.save(&path) {
                     Ok(()) => {
                         tracing::info!("Pin temp file saved to {}", path.display());
@@ -161,6 +175,9 @@ impl PinnedWindow {
             pixels: framed,
             width: total_w,
             height: total_h,
+            image,
+            image_w: img_w,
+            image_h: img_h,
             dragging: false,
             drag_start: None,
             temp_path,
@@ -175,6 +192,12 @@ impl PinnedWindow {
         self.window.id()
     }
 
+    /// The pinned capture (RGBA8) and its size, without the border and
+    /// shadow the window draws around it.
+    pub fn image(&self) -> (Vec<u8>, u32, u32) {
+        (self.image.clone(), self.image_w, self.image_h)
+    }
+
     pub fn render(&mut self) {
         let (w, h) = (self.width, self.height);
         if let (Some(nz_w), Some(nz_h)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
@@ -183,7 +206,14 @@ impl PinnedWindow {
             }
             if let Ok(mut buffer) = self.surface.buffer_mut() {
                 let pixel_count = (w * h) as usize;
-                for (i, chunk) in self.pixels.chunks_exact(4).take(pixel_count).enumerate() {
+                for (i, chunk) in self
+                    .pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .take(pixel_count)
+                    .enumerate()
+                {
                     buffer[i] =
                         ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
                 }
@@ -192,17 +222,16 @@ impl PinnedWindow {
         }
     }
 
-    /// Handle an event for this pin's window. Returns true when the pin
-    /// should be closed (Escape pressed or window close requested).
-    pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
+    /// Handle an event for this pin's window.
+    pub fn handle_event(&mut self, event: &WindowEvent) -> PinEvent {
         match event {
-            WindowEvent::CloseRequested => return true,
+            WindowEvent::CloseRequested => return PinEvent::Close,
 
             WindowEvent::RedrawRequested => self.render(),
 
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if let Key::Named(NamedKey::Escape) = &event.logical_key {
-                    return true;
+                    return PinEvent::Close;
                 }
             }
 
@@ -237,22 +266,7 @@ impl PinnedWindow {
                 state: ElementState::Pressed,
                 button: MouseButton::Middle,
                 ..
-            } => {
-                let pixels = self.pixels.clone();
-                let (w, h) = (self.width, self.height);
-                std::thread::spawn(move || match export::copy_to_clipboard(&pixels, w, h) {
-                    Ok(()) => {
-                        let _ = Notification::new()
-                            .summary("screen-mark")
-                            .body("Pin image copied to clipboard")
-                            .timeout(2000)
-                            .show();
-                    }
-                    Err(e) => {
-                        tracing::error!("Pin clipboard copy failed: {e}");
-                    }
-                });
-            }
+            } => return PinEvent::Copy,
 
             WindowEvent::CursorMoved { position, .. } if self.dragging => {
                 if let Some(start) = self.drag_start {
@@ -273,7 +287,7 @@ impl PinnedWindow {
 
             _ => {}
         }
-        false
+        PinEvent::Nothing
     }
 }
 

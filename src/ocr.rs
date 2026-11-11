@@ -1,122 +1,105 @@
-//! OCR text extraction using the Windows built-in OCR engine.
+//! OCR text extraction with the engine built into Windows 10 and later
+//! (`Windows.Media.Ocr`).
 //!
-//! Uses PowerShell to access the WinRT `Windows.Media.Ocr` API, which is
-//! available on Windows 10+ without any external dependencies.
+//! The engine is called in-process. Earlier versions wrote the image to a
+//! temp file and ran a PowerShell script on it with `-ExecutionPolicy
+//! Bypass`: a quarter of a second just to start PowerShell, a copy of the
+//! capture on disk, and nothing at all on a machine where PowerShell is
+//! locked down.
 
-/// Extract text from RGBA pixel data using Windows OCR.
-///
-/// Saves the image to a temporary PNG, invokes the WinRT OCR engine via
-/// PowerShell, and returns the recognized text.
+/// Read the text in an image. `pixels` is straight RGBA8, `width` x `height`.
+/// Lines of text come back separated by `\n`.
 #[cfg(target_os = "windows")]
 pub fn extract_text(pixels: &[u8], width: u32, height: u32) -> Result<String, String> {
-    let temp_dir = std::env::temp_dir();
-    let unique_name = format!(
-        "screen-mark_ocr_{}.png",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
-    let temp_path = temp_dir.join(unique_name);
-
-    let img =
-        image::RgbaImage::from_raw(width, height, pixels.to_vec()).ok_or("Invalid image data")?;
-    img.save(&temp_path).map_err(|e| e.to_string())?;
-
-    // Guard ensures temp file is cleaned up even on panic
-    struct TempFileGuard(std::path::PathBuf);
-    impl Drop for TempFileGuard {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-    let _guard = TempFileGuard(temp_path.clone());
-
-    let abs_path = temp_path
-        .canonicalize()
-        .map_err(|e| e.to_string())?
-        .to_string_lossy()
-        .to_string();
-
-    // Strip the \\?\ prefix that canonicalize adds on Windows
-    let abs_path = abs_path
-        .strip_prefix(r"\\?\")
-        .unwrap_or(&abs_path)
-        .to_string();
-
-    extract_text_powershell(&abs_path)
-}
-
-#[cfg(target_os = "windows")]
-fn extract_text_powershell(image_path: &str) -> Result<String, String> {
-    let script = r#"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-
-# Helper to await WinRT async operations
-$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() |
-    Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
-    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
-
-Function Await($WinRtTask, $ResultType) {
-    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-    $netTask = $asTask.Invoke($null, @($WinRtTask))
-    $netTask.Wait(-1) | Out-Null
-    $netTask.Result
-}
-
-# Load required WinRT types
-[Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime] | Out-Null
-[Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation.UniversalApiContract, ContentType = WindowsRuntime] | Out-Null
-[Windows.Media.Ocr.OcrEngine, Windows.Foundation.UniversalApiContract, ContentType = WindowsRuntime] | Out-Null
-
-$path = $env:SCREEN_MARK_OCR_PATH
-$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
-$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-if ($null -eq $engine) {
-    Write-Error 'No OCR-capable language pack is installed. Add one under Windows Settings > Time & Language > Language.'
-    exit 1
-}
-$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-Write-Output $result.Text
-"#;
-
-    // CREATE_NO_WINDOW: without it a console window flashes on screen, since
-    // the GUI-subsystem app has no console for powershell.exe to inherit.
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    let output = std::process::Command::new("powershell")
-        .env("SCREEN_MARK_OCR_PATH", image_path)
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
-
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if text.is_empty() {
-            Err("No text found in the selected region".to_string())
-        } else {
-            Ok(text)
-        }
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(format!("OCR failed: {stderr}"))
-    }
+    win::recognize(pixels, width, height)
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn extract_text(_pixels: &[u8], _width: u32, _height: u32) -> Result<String, String> {
     Err("OCR is only available on Windows 10+".to_string())
+}
+
+/// `pixels` as BGRA (what the engine takes), scaled down if either side is
+/// longer than `max_side`. Returns the bytes and the size they describe.
+/// `None` if the buffer is too short for the size.
+pub fn to_bgra_within(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    max_side: u32,
+) -> Option<(Vec<u8>, u32, u32)> {
+    let expected = width as usize * height as usize * 4;
+    if width == 0 || height == 0 || pixels.len() < expected {
+        return None;
+    }
+    let max_side = max_side.max(1);
+    let (mut out, w, h) = if width > max_side || height > max_side {
+        let scale = max_side as f64 / width.max(height) as f64;
+        let w = ((width as f64 * scale) as u32).clamp(1, max_side);
+        let h = ((height as f64 * scale) as u32).clamp(1, max_side);
+        let image = image::RgbaImage::from_raw(width, height, pixels[..expected].to_vec())?;
+        let small = image::imageops::resize(&image, w, h, image::imageops::FilterType::Triangle);
+        (small.into_raw(), w, h)
+    } else {
+        (pixels[..expected].to_vec(), width, height)
+    };
+    for px in out.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    Some((out, w, h))
+}
+
+#[cfg(target_os = "windows")]
+mod win {
+    use windows::core::HRESULT;
+    use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
+    use windows::Media::Ocr::OcrEngine;
+    use windows::Storage::Streams::DataWriter;
+
+    /// A null object from a WinRT call that "tries" to make one.
+    const E_POINTER: HRESULT = HRESULT(0x80004003_u32 as i32);
+
+    pub fn recognize(pixels: &[u8], width: u32, height: u32) -> Result<String, String> {
+        let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| {
+            if e.code().is_ok() || e.code() == E_POINTER {
+                "Windows has no text recognition for your languages. Add one under \
+                 Settings > Time & language > Language & region (a language with \
+                 \"Optical character recognition\")."
+                    .to_string()
+            } else {
+                format!("Couldn't start Windows OCR: {}", e.message())
+            }
+        })?;
+
+        // The engine refuses images over a few thousand pixels a side; a
+        // capture across several monitors is scaled to fit.
+        let max_side = OcrEngine::MaxImageDimension().unwrap_or(4096);
+        let (bgra, w, h) =
+            super::to_bgra_within(pixels, width, height, max_side).ok_or("Invalid image data")?;
+
+        let read = || -> windows::core::Result<String> {
+            let writer = DataWriter::new()?;
+            writer.WriteBytes(&bgra)?;
+            let buffer = writer.DetachBuffer()?;
+            let bitmap = SoftwareBitmap::CreateCopyFromBuffer(
+                &buffer,
+                BitmapPixelFormat::Bgra8,
+                w as i32,
+                h as i32,
+            )?;
+            // This is a worker thread, so waiting here blocks nothing.
+            let result = engine.RecognizeAsync(&bitmap)?.get()?;
+            let mut lines = Vec::new();
+            for line in result.Lines()? {
+                lines.push(line.Text()?.to_string());
+            }
+            Ok(lines.join("\n"))
+        };
+        let text = read().map_err(|e| format!("OCR failed: {}", e.message()))?;
+        if text.trim().is_empty() {
+            Err("No text found in the selected region".to_string())
+        } else {
+            Ok(text)
+        }
+    }
 }

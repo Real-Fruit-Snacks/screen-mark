@@ -132,3 +132,23 @@ fn theme_mode_parses_light_case_insensitively() {
     cfg.general.theme = "garbage".to_string();
     assert_eq!(cfg.theme_mode(), screen_mark::theme::ThemeMode::Dark);
 }
+
+#[test]
+fn updates_are_off_and_from_github_unless_set() {
+    let cfg = Config::default();
+    assert!(!cfg.updates.auto_check);
+    assert_eq!(cfg.updates.url, "");
+    // A config written before there was an [updates] section.
+    let old: Config = toml::from_str("[general]\ntheme = \"light\"\n").unwrap();
+    assert!(!old.updates.auto_check);
+    assert_eq!(old.updates.url, "");
+
+    let set: Config = toml::from_str(
+        "[updates]\nauto_check = true\nurl = \"https://intranet.example/screen-mark/downloads\"\n",
+    )
+    .unwrap();
+    assert!(set.updates.auto_check);
+    let again: Config = toml::from_str(&toml::to_string(&set).unwrap()).unwrap();
+    assert!(again.updates.auto_check);
+    assert_eq!(again.updates.url, set.updates.url);
+}

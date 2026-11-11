@@ -13,6 +13,12 @@
 //! are shown in red on both rows and Save refuses until one is changed.
 //! While a button is listening the app releases its global hotkeys, so any
 //! combination, including the current ones, reaches this window.
+//!
+//! Keyboard: Tab and Shift+Tab (or the arrow keys) move between controls,
+//! Enter or Space presses the focused one, Ctrl+Tab changes tab, Ctrl+Enter
+//! saves, Esc closes. Every control is also described in `widgets()` (what
+//! it is, what it is called, whether it is on), which is what a screen
+//! reader is told.
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -25,6 +31,8 @@ use tiny_skia::{
 };
 use winit::window::Window;
 
+pub use crate::access::Role;
+use crate::access::{Control, Request, Snapshot};
 use crate::config::{default_save_folder, Config, NotificationMode};
 use crate::geometry::{Color, Point};
 use crate::hotkey::Status;
@@ -73,8 +81,10 @@ pub enum Action {
     ToggleTheme,
     ToggleHistory,
     ToggleAutostart,
+    ToggleUpdateCheck,
     ScreenshotAll(bool),
     ToggleFinishOnRelease,
+    ToggleMagnifier,
     ToggleCopyAlsoSaves,
     ToggleAskWhere,
     BrowseDir,
@@ -113,6 +123,23 @@ struct HitRect {
     action: Action,
 }
 
+/// One control, as the last `render` drew it: what keyboard focus moves
+/// between, and what a screen reader announces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Widget {
+    pub action: Action,
+    pub role: Role,
+    /// What it is called.
+    pub label: String,
+    /// On or off, for a check box; chosen or not, for a tab or radio button.
+    pub checked: Option<bool>,
+    /// What it currently holds (a key button's binding).
+    pub value: Option<String>,
+    /// Where it is in the window, in logical pixels: (x, y, w, h). `None`
+    /// while it is scrolled out of view.
+    pub rect: Option<(f32, f32, f32, f32)>,
+}
+
 impl HitRect {
     fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && x <= self.x + self.w && y >= self.y && y <= self.y + self.h
@@ -137,6 +164,13 @@ pub struct SettingsView {
     /// but doesn't block saving other changes.
     loaded: HashMap<KeyId, String>,
     hits: Vec<HitRect>,
+    /// Every control of the current tab, in reading order (see `Widget`).
+    widgets: Vec<Widget>,
+    /// The control with keyboard focus: its action, and which of the
+    /// widgets with that action it is (the two theme buttons share one).
+    focus: Option<(Action, usize)>,
+    /// Draw the focus ring. Set by the keyboard, cleared by the mouse.
+    focus_ring: bool,
     hovered: Option<usize>,
     cursor: (f32, f32),
     scroll: f32,
@@ -164,6 +198,9 @@ impl SettingsView {
             peak_until: None,
             loaded,
             hits: Vec::new(),
+            widgets: Vec::new(),
+            focus: None,
+            focus_ring: false,
             hovered: None,
             cursor: (-1.0, -1.0),
             scroll: 0.0,
@@ -231,6 +268,197 @@ impl SettingsView {
         old != self.hovered
     }
 
+    /// Every control of the current tab, in reading order, as of the last
+    /// `render`.
+    pub fn widgets(&self) -> &[Widget] {
+        &self.widgets
+    }
+
+    /// The control with keyboard focus, if any.
+    pub fn focused(&self) -> Option<&Widget> {
+        self.focus_index().map(|i| &self.widgets[i])
+    }
+
+    /// Whether the focus ring is drawn (the keyboard was used last).
+    pub fn focus_visible(&self) -> bool {
+        self.focus_ring && self.focus_index().is_some()
+    }
+
+    fn focus_index(&self) -> Option<usize> {
+        let (action, nth) = self.focus?;
+        self.widgets
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.action == action)
+            .map(|(i, _)| i)
+            .nth(nth)
+    }
+
+    fn set_focus(&mut self, index: usize) {
+        let Some(widget) = self.widgets.get(index) else {
+            self.focus = None;
+            return;
+        };
+        let action = widget.action;
+        let nth = self.widgets[..index]
+            .iter()
+            .filter(|w| w.action == action)
+            .count();
+        self.focus = Some((action, nth));
+        // A key row scrolled out of view comes into it.
+        if let Action::EditKey(id) | Action::ResetKey(id) = action {
+            self.reveal(id);
+        }
+    }
+
+    /// Move focus to a screen reader's choice, or a test's.
+    pub fn focus_action(&mut self, action: Action) -> bool {
+        self.layout();
+        match self.widgets.iter().position(|w| w.action == action) {
+            Some(i) => {
+                self.set_focus(i);
+                self.focus_ring = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The window as a screen reader should present it, as of the last
+    /// `render`.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            title: "screen-mark Settings".to_string(),
+            controls: self
+                .widgets
+                .iter()
+                .map(|w| Control {
+                    role: w.role,
+                    label: w.label.clone(),
+                    checked: w.checked,
+                    value: w.value.clone(),
+                    rect: w.rect,
+                })
+                .collect(),
+            focus: self.focus_index(),
+            status: self.message.as_ref().map(|(text, _)| text.clone()),
+        }
+    }
+
+    /// Carry out a screen reader's request on control `index` of `snapshot`.
+    pub fn request(&mut self, request: Request) -> Outcome {
+        self.layout();
+        let (Request::Press(index) | Request::Focus(index)) = request;
+        let Some(action) = self.widgets.get(index).map(|w| w.action) else {
+            return Outcome::Nothing;
+        };
+        self.set_focus(index);
+        self.focus_ring = true;
+        match request {
+            Request::Press(_) => self.act(action),
+            Request::Focus(_) => Outcome::Redraw,
+        }
+    }
+
+    /// Bring `widgets` up to date with the state (a key press can arrive
+    /// between two draws).
+    fn layout(&mut self) {
+        let _ = self.render();
+    }
+
+    /// A key press while no key button is listening: move between controls
+    /// and press them.
+    fn navigate(&mut self, press: KeyPress) -> Outcome {
+        let Some(Key::Named(key)) = press.key else {
+            return Outcome::Nothing;
+        };
+        let mods = press.mods;
+        let plain = mods.is_empty();
+        match key {
+            Named::Escape if plain => Outcome::Close { saved: false },
+            Named::Tab if mods.ctrl() => self.step_tab(if mods.shift() { -1 } else { 1 }),
+            Named::Tab if !mods.has_command() => self.step_focus(if mods.shift() { -1 } else { 1 }),
+            Named::Down | Named::Right if plain => self.arrow(1),
+            Named::Up | Named::Left if plain => self.arrow(-1),
+            Named::Home if plain => self.focus_edge(false),
+            Named::End if plain => self.focus_edge(true),
+            Named::PageDown | Named::PageUp if plain => {
+                let page = (FOOTER_TOP - CONTENT_TOP) / 26.0 - 1.0;
+                let lines = if key == Named::PageDown { -page } else { page };
+                if self.scroll_by(lines) {
+                    Outcome::Redraw
+                } else {
+                    Outcome::Nothing
+                }
+            }
+            Named::Enter if mods == Mods::CTRL => {
+                self.focus_ring = true;
+                self.act(Action::Save)
+            }
+            Named::Enter | Named::Space if plain => {
+                self.layout();
+                match self.focused().map(|w| w.action) {
+                    Some(action) => {
+                        self.focus_ring = true;
+                        self.act(action)
+                    }
+                    None => Outcome::Nothing,
+                }
+            }
+            _ => Outcome::Nothing,
+        }
+    }
+
+    /// Focus the next (`1`) or previous (`-1`) control, wrapping round.
+    fn step_focus(&mut self, by: i32) -> Outcome {
+        self.layout();
+        let count = self.widgets.len() as i32;
+        if count == 0 {
+            return Outcome::Nothing;
+        }
+        let next = match self.focus_index() {
+            Some(i) => (i as i32 + by).rem_euclid(count),
+            // Nothing focused yet: Tab starts at the top, Shift+Tab at the end.
+            None if by > 0 => 0,
+            None => count - 1,
+        };
+        self.set_focus(next as usize);
+        self.focus_ring = true;
+        Outcome::Redraw
+    }
+
+    /// An arrow key: on the tab strip it changes tab, anywhere else it
+    /// moves focus like Tab.
+    fn arrow(&mut self, by: i32) -> Outcome {
+        self.layout();
+        match self.focused().map(|w| w.role) {
+            Some(Role::Tab) => self.step_tab(by),
+            _ => self.step_focus(by),
+        }
+    }
+
+    /// Switch to the next or previous tab and focus its tab button.
+    fn step_tab(&mut self, by: i32) -> Outcome {
+        let current = TABS.iter().position(|(t, _)| *t == self.tab).unwrap_or(0);
+        let next = (current as i32 + by).rem_euclid(TABS.len() as i32) as usize;
+        self.open_tab(TABS[next].0);
+        self.message = None;
+        self.focus = Some((Action::SwitchTab(TABS[next].0), 0));
+        self.focus_ring = true;
+        Outcome::Redraw
+    }
+
+    fn focus_edge(&mut self, last: bool) -> Outcome {
+        self.layout();
+        if self.widgets.is_empty() {
+            return Outcome::Nothing;
+        }
+        let index = if last { self.widgets.len() - 1 } else { 0 };
+        self.set_focus(index);
+        self.focus_ring = true;
+        Outcome::Redraw
+    }
+
     pub fn click(&mut self, x: f32, y: f32) -> Outcome {
         self.cursor = (x, y);
         let action = self
@@ -238,6 +466,15 @@ impl SettingsView {
             .iter()
             .find(|h| h.contains(x, y))
             .map(|h| h.action);
+        // The mouse takes focus with it, without the ring.
+        self.focus_ring = false;
+        if let Some(i) = self
+            .widgets
+            .iter()
+            .position(|w| w.rect.is_some_and(|r| within(r, x, y)))
+        {
+            self.set_focus(i);
+        }
         match action {
             Some(a) => self.act(a),
             None => {
@@ -300,6 +537,10 @@ impl SettingsView {
                 g.screenshot_area = if all { "all" } else { "monitor" }.to_string();
             }
             Action::ToggleFinishOnRelease => g.finish_on_release = !g.finish_on_release,
+            Action::ToggleMagnifier => g.magnifier = !g.magnifier,
+            Action::ToggleUpdateCheck => {
+                self.config.updates.auto_check = !self.config.updates.auto_check;
+            }
             Action::ToggleCopyAlsoSaves => g.copy_also_saves = !g.copy_also_saves,
             Action::ToggleAskWhere => {
                 let now = self.config.ask_where_to_save();
@@ -413,13 +654,11 @@ impl SettingsView {
     /// modifier changed.
     pub fn key(&mut self, press: KeyPress) -> Outcome {
         let Some(id) = self.editing else {
-            if press.pressed
-                && press.key == Some(Key::Named(Named::Escape))
-                && press.mods.is_empty()
-            {
-                return Outcome::Close { saved: false };
-            }
-            return Outcome::Nothing;
+            return if press.pressed {
+                self.navigate(press)
+            } else {
+                Outcome::Nothing
+            };
         };
 
         let now = Instant::now();
@@ -439,7 +678,7 @@ impl SettingsView {
             return Outcome::Nothing;
         }
         let mut press = press;
-        if !press.pressed && self.peak_until.map_or(true, |t| now <= t) {
+        if !press.pressed && self.peak_until.is_none_or(|t| now <= t) {
             // PrintScreen's key-up: count modifiers released just before it.
             press.mods = press.mods | self.peak;
         }
@@ -563,6 +802,7 @@ impl SettingsView {
             crate::theme::bg_1(),
         );
         self.hits.clear();
+        self.widgets.clear();
 
         label(
             &mut p,
@@ -591,7 +831,13 @@ impl SettingsView {
             };
             let w = measure_text_width(name, 14.0);
             label(&mut p, tx + (tab_w - w) / 2.0, tab_y + 8.0, name, 14.0, c);
-            self.hit(tx, tab_y, tab_w, 32.0, Action::SwitchTab(*tab));
+            self.widget(
+                (tx, tab_y, tab_w, 32.0),
+                Action::SwitchTab(*tab),
+                Role::Tab,
+                name,
+                Some(active),
+            );
         }
         fill(
             &mut p,
@@ -675,6 +921,32 @@ impl SettingsView {
             "Save & Close",
             Action::Save,
         );
+
+        // A Reset button that just did its job is gone; its key button
+        // takes the focus over.
+        if self.focus_index().is_none() {
+            if let Some((Action::ResetKey(id), _)) = self.focus {
+                self.focus = Some((Action::EditKey(id), 0));
+            }
+        }
+        if self.focus_ring {
+            if let Some((x, y, w, h)) = self.focused().and_then(|w| w.rect) {
+                // Two pixels wide, two pixels clear of the control, on whole
+                // pixels (text-sized controls have fractional widths).
+                let ring = crate::theme::accent();
+                let (x0, y0) = (x.floor() - 2.0, y.floor() - 2.0);
+                let (x1, y1) = ((x + w).ceil() + 2.0, (y + h).ceil() + 2.0);
+                outline(
+                    &mut p,
+                    x0 - 1.0,
+                    y0 - 1.0,
+                    x1 - x0 + 2.0,
+                    y1 - y0 + 2.0,
+                    ring,
+                );
+                outline(&mut p, x0, y0, x1 - x0, y1 - y0, ring);
+            }
+        }
         p
     }
 
@@ -690,7 +962,14 @@ impl SettingsView {
                 fill(p, sx - 2.0, y - 2.0, 32.0, 32.0, crate::theme::bg_4());
             }
             fill(p, sx, y, 28.0, 28.0, (r, g, b));
-            self.hit(sx, y, 28.0, 28.0, Action::SelectColor(i));
+            let chosen = self.config.general.default_color == name;
+            self.widget(
+                (sx, y, 28.0, 28.0),
+                Action::SelectColor(i),
+                Role::Radio,
+                &format!("Default colour: {name}"),
+                Some(chosen),
+            );
         }
         y += 48.0;
 
@@ -731,7 +1010,7 @@ impl SettingsView {
             hist,
             Action::ToggleHistory,
         );
-        y += 30.0;
+        y += 28.0;
         let auto = self.autostart;
         self.checkbox(
             p,
@@ -740,7 +1019,16 @@ impl SettingsView {
             auto,
             Action::ToggleAutostart,
         );
-        y += 40.0;
+        y += 28.0;
+        let updates = self.config.updates.auto_check;
+        self.checkbox(
+            p,
+            y,
+            "Check for a new version once a day",
+            updates,
+            Action::ToggleUpdateCheck,
+        );
+        y += 38.0;
 
         section(p, y, "Imgur upload");
         y += 22.0;
@@ -779,7 +1067,7 @@ impl SettingsView {
                 ("All monitors", all, Action::ScreenshotAll(true)),
             ],
         );
-        y += 44.0;
+        y += 40.0;
 
         let region = display_binding(&self.config.hotkey.region);
         section(p, y, &format!("Region hotkey ({region})"));
@@ -792,7 +1080,16 @@ impl SettingsView {
             fin,
             Action::ToggleFinishOnRelease,
         );
-        y += 40.0;
+        y += 26.0;
+        let magnifier = self.config.general.magnifier;
+        self.checkbox(
+            p,
+            y,
+            "Show a magnifier while selecting a region",
+            magnifier,
+            Action::ToggleMagnifier,
+        );
+        y += 38.0;
 
         section(p, y, "Saving");
         y += 22.0;
@@ -851,7 +1148,7 @@ impl SettingsView {
                 Action::DefaultDir,
             );
         }
-        y += 44.0;
+        y += 40.0;
 
         section(p, y, "After a capture");
         y += 24.0;
@@ -882,7 +1179,7 @@ impl SettingsView {
                 ),
             ],
         );
-        y += 36.0;
+        y += 32.0;
         label(
             p,
             LEFT,
@@ -912,12 +1209,46 @@ impl SettingsView {
         );
         let report = self.config.key_report();
         let mut hits: Vec<HitRect> = Vec::new();
+        let mut widgets: Vec<Widget> = Vec::new();
         let bind_w = 156.0;
         let reset_w = 52.0;
         let bind_x = WIN_W as f32 - LEFT - reset_w - 6.0 - bind_w;
         let reset_x = WIN_W as f32 - LEFT - reset_w;
         for row in &layout {
             let ly = row.y - self.scroll;
+            let screen_y = view_top + ly;
+            // Fully inside the list: drawn, clickable, and has a place for
+            // the focus ring. Rows outside it are still listed in `widgets`,
+            // so focus can move to them and scroll them in.
+            let in_view = screen_y >= view_top && screen_y + 24.0 <= FOOTER_TOP;
+            if let Some(id) = row.id {
+                let raw = self.config.binding(id);
+                let shown = if self.editing == Some(id) {
+                    "listening for keys".to_string()
+                } else {
+                    display_binding(&raw)
+                };
+                widgets.push(Widget {
+                    action: Action::EditKey(id),
+                    role: Role::Button,
+                    label: id.label().to_string(),
+                    checked: None,
+                    value: Some(shown),
+                    rect: in_view.then_some((bind_x, screen_y - 1.0, bind_w, 24.0)),
+                });
+                let is_default = Binding::parse(&raw).ok().flatten()
+                    == Binding::parse(id.default_binding()).ok().flatten();
+                if !is_default {
+                    widgets.push(Widget {
+                        action: Action::ResetKey(id),
+                        role: Role::Button,
+                        label: format!("Reset {} to its default", id.label()),
+                        checked: None,
+                        value: None,
+                        rect: in_view.then_some((reset_x, screen_y - 1.0, reset_w, 24.0)),
+                    });
+                }
+            }
             if ly + 30.0 < 0.0 || ly > view_h {
                 continue;
             }
@@ -965,7 +1296,6 @@ impl SettingsView {
             } else {
                 (display_binding(&raw), crate::theme::text_normal())
             };
-            let screen_y = view_top + ly;
             let hovered = self.is_hovered(bind_x, screen_y - 1.0, bind_w, 24.0);
             let bg = if editing || hovered {
                 crate::theme::bg_4()
@@ -1070,6 +1400,7 @@ impl SettingsView {
             None,
         );
         self.hits.extend(hits);
+        self.widgets.extend(widgets);
 
         // While listening, a problem with the currently typed attempt is in
         // the footer; otherwise show the hovered row's problem, if any.
@@ -1099,17 +1430,35 @@ impl SettingsView {
             crate::theme::text_soft(),
         );
         y += 24.0;
+        // 22 apart: fifteen tools have to fit above the footer.
         let entries = self.config.toolbar.entries();
         for (i, (_, name, on)) in entries.iter().enumerate() {
             self.checkbox(p, y, name, *on, Action::ToggleToolbar(i));
-            y += 24.0;
+            y += 22.0;
         }
     }
 
     // ───────────── widgets ─────────────
 
-    fn hit(&mut self, x: f32, y: f32, w: f32, h: f32, action: Action) {
+    /// A control that is on screen: where a click lands, and its entry in
+    /// `widgets`.
+    fn widget(
+        &mut self,
+        (x, y, w, h): (f32, f32, f32, f32),
+        action: Action,
+        role: Role,
+        label: &str,
+        checked: Option<bool>,
+    ) {
         self.hits.push(HitRect { x, y, w, h, action });
+        self.widgets.push(Widget {
+            action,
+            role,
+            label: spoken_label(action, label),
+            checked,
+            value: None,
+            rect: Some((x, y, w, h)),
+        });
     }
 
     fn is_hovered(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -1143,7 +1492,7 @@ impl SettingsView {
             12.0,
             crate::theme::text_normal(),
         );
-        self.hit(x, y, w, h, action);
+        self.widget((x, y, w, h), action, Role::Button, text, None);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1170,7 +1519,7 @@ impl SettingsView {
             12.0,
             crate::theme::text_on_accent(),
         );
-        self.hit(x, y, w, h, action);
+        self.widget((x, y, w, h), action, Role::Button, text, None);
     }
 
     fn checkbox(&mut self, p: &mut Pixmap, y: f32, text: &str, on: bool, action: Action) {
@@ -1215,7 +1564,13 @@ impl SettingsView {
             13.0,
             crate::theme::text_normal(),
         );
-        self.hit(LEFT, y - 2.0, WIN_W as f32 - LEFT * 2.0, 22.0, action);
+        self.widget(
+            (LEFT, y - 2.0, WIN_W as f32 - LEFT * 2.0, 22.0),
+            action,
+            Role::CheckBox,
+            text,
+            Some(on),
+        );
     }
 
     fn segmented(&mut self, p: &mut Pixmap, y: f32, items: &[(&str, bool, Action)]) {
@@ -1240,9 +1595,25 @@ impl SettingsView {
                 crate::theme::text_muted()
             };
             label(p, x + 12.0, y + 6.0, text, 12.0, c);
-            self.hit(x, y, w, 26.0, *action);
+            self.widget((x, y, w, 26.0), *action, Role::Radio, text, Some(*on));
             x += w + 4.0;
         }
+    }
+}
+
+fn within((x, y, w, h): (f32, f32, f32, f32), px: f32, py: f32) -> bool {
+    px >= x && px <= x + w && py >= y && py <= y + h
+}
+
+/// What a control is called when its drawn text doesn't say (a bare "+").
+fn spoken_label(action: Action, drawn: &str) -> String {
+    match action {
+        Action::ThicknessDown => "Thinner default line".to_string(),
+        Action::ThicknessUp => "Thicker default line".to_string(),
+        Action::BrowseDir => "Browse for the save folder".to_string(),
+        Action::DefaultDir => "Use the default save folder".to_string(),
+        Action::ToggleToolbar(_) => format!("Show {drawn} on the toolbar"),
+        _ => drawn.to_string(),
     }
 }
 

@@ -448,6 +448,17 @@ fn capture_tab_options() {
 }
 
 #[test]
+fn looking_for_updates_is_off_until_switched_on() {
+    let _l = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut v = view();
+    assert!(!v.config.updates.auto_check);
+    click(&mut v, Action::ToggleUpdateCheck);
+    assert!(v.config.updates.auto_check);
+    click(&mut v, Action::ToggleUpdateCheck);
+    assert!(!v.config.updates.auto_check);
+}
+
+#[test]
 fn ask_where_to_save_keeps_2_0_behaviour_until_changed() {
     let _l = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 2.0 config without a folder: Ctrl+S asked.

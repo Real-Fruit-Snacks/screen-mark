@@ -9,6 +9,8 @@ name: Release
 #   with networking switched off.
 # - screen-mark-vX.Y.Z-website.zip: the website with the release files inside it.
 # - SHA256SUMS.txt for all of the above.
+# - latest.json and latest.json.sig: what the built-in updater reads. The first names
+#   the Windows and Linux downloads with their sizes and SHA-256, the second signs it.
 #
 # Pushing a v* tag publishes a release. Running the workflow by hand
 # (workflow_dispatch) builds and packages everything as workflow artifacts and
@@ -163,11 +165,30 @@ jobs:
           path: dist
       - name: Read the version
         run: echo "VERSION=v$(sed -n 's/^version = "\(.*\)"\r\{0,1\}$/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_ENV"
+      - name: Write and sign the update manifest
+        # latest.json lists this release's downloads with their sizes and SHA-256;
+        # latest.json.sig signs it. An installed screen-mark updates only from a
+        # manifest signed with a key in src/update/keys.rs, and the script checks
+        # that before anything is published. The key is the UPDATE_SIGNING_KEY
+        # secret (CONTRIBUTING.md, "Releases and the update key").
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [[ -z "$UPDATE_SIGNING_KEY" ]]; then
+            if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+              echo "::error::The UPDATE_SIGNING_KEY secret is not set. Without it this release would have no signed update manifest, and installed copies could not update to it."; exit 1
+            fi
+            echo "::warning::UPDATE_SIGNING_KEY is not set, so this dry run has no update manifest."
+            exit 0
+          fi
+          bash .github/scripts/update-manifest.sh make dist "$VERSION"
       - name: Package website (self-contained offline hosting bundle)
         # The whole static site (HTML, CSS, JS, vendored fonts, images) plus a GitLab
         # Pages CI file, so it can be hosted anywhere: GitHub Pages, GitLab Pages, or
         # an air-gapped web server. docs/downloads/ holds this release's Windows and
-        # Linux files, and the page's download links are pointed at them.
+        # Linux files, and the page's download links are pointed at them. With the
+        # update manifest beside them, that folder is also somewhere screen-mark
+        # can update from: `[updates] url` in config.toml.
         run: |
           mkdir -p bundle/docs/downloads
           cp -r docs/. bundle/docs/
@@ -175,6 +196,9 @@ jobs:
           for f in windows-x64.msi windows-x64.zip linux-x64.tar.gz; do
             cp "dist/screen-mark-$VERSION-$f" bundle/docs/downloads/
           done
+          if [[ -f dist/latest.json ]]; then
+            cp dist/latest.json dist/latest.json.sig bundle/docs/downloads/
+          fi
           (cd bundle/docs/downloads && sha256sum screen-mark-* > SHA256SUMS.txt)
           sed -i "s#https://github.com/Real-Fruit-Snacks/screen-mark/releases/download/$VERSION/#downloads/#g" bundle/docs/index.html
           if grep -q 'releases/download/' bundle/docs/index.html; then
@@ -205,5 +229,7 @@ jobs:
           files: |
             screen-mark-*
             SHA256SUMS.txt
+            latest.json
+            latest.json.sig
           generate_release_notes: true
           draft: false

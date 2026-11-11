@@ -126,7 +126,7 @@ unsafe fn capture_virtual_desktop() -> Result<CapturedScreen, CaptureError> {
     // Convert BGRA -> RGBA. GetDIBits leaves the fourth byte undefined for
     // BI_RGB captures, so force it opaque — downstream code (tiny-skia
     // premultiplied pixmaps, PNG export, clipboard) relies on alpha == 255.
-    for chunk in bgra_pixels.chunks_exact_mut(4) {
+    for chunk in bgra_pixels.as_chunks_mut::<4>().0 {
         chunk.swap(0, 2); // swap B and R
         chunk[3] = 255;
     }
