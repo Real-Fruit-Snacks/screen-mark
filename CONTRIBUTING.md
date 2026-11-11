@@ -37,7 +37,8 @@ cargo fmt --check
 
   ```sh
   sudo apt-get install -y xvfb openbox stalonetray xdotool xclip imagemagick x11-xserver-utils \
-      x11-utils python3-pil python3-xlib python3-dbus python3-gi dbus-x11 libayatana-appindicator3-1
+      x11-utils python3-pil python3-xlib python3-dbus python3-gi dbus-x11 libayatana-appindicator3-1 \
+      libxkbcommon-x11-0
   cargo build
   tests/e2e/run.sh                      # all scenarios
   tests/e2e/run.sh target/debug/screen-mark rebind   # just the ones whose name contains "rebind"

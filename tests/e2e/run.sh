@@ -5,7 +5,7 @@
 #
 # Needs: Xvfb openbox stalonetray xdotool xclip imagemagick x11-xserver-utils
 #        python3-pil python3-xlib python3-dbus python3-gi dbus-x11
-#        libayatana-appindicator3-1 (Ubuntu package names)
+#        libayatana-appindicator3-1 libxkbcommon-x11-0 (Ubuntu package names)
 set -euo pipefail
 
 BIN="${1:-target/debug/screen-mark}"
