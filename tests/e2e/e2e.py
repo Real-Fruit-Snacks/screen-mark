@@ -747,8 +747,12 @@ def main():
                 save_artifact(root_png(), f"FAIL-{name}.png")
             except Exception:  # noqa: BLE001
                 pass
-            for a in apps:
-                a.keep_log(f"FAIL-{name}")
+            for i, a in enumerate(apps):
+                a.keep_log(f"FAIL-{name}" + (f"-{i}" if i else ""))
+                # CI shows only this output, so say what the app said.
+                lines = a.log().splitlines()
+                print(f"--- app log ({len(lines)} lines, last 40) ---")
+                print("\n".join(lines[-40:]) or "(empty)", flush=True)
         finally:
             for a in apps:
                 a.stop()
