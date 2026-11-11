@@ -15,13 +15,30 @@ set -euo pipefail
 
 list=/etc/apt/apt-mirrors.txt
 fallback="http://mirrors.edge.kernel.org/ubuntu/"
-if [[ -f "$list" ]] && ! grep -q "$fallback" "$list"; then
-  last=$(grep -o 'priority:[0-9]*' "$list" | cut -d: -f2 | sort -n | tail -n 1)
-  printf '%s\tpriority:%s\n' "$fallback" "$(( ${last:-0} + 1 ))" | sudo tee -a "$list" >/dev/null
+codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+if [[ -f "$list" ]]; then
+  # apt tries every mirror, with retries, for every file before it reaches
+  # the next one, so a dead mirror costs minutes. Keep the ones that answer
+  # now, in their order, then the fallback.
+  answering=()
+  while IFS=$'\t' read -r mirror _; do
+    [[ -n "$mirror" && "$mirror" != "$fallback" ]] || continue
+    if curl -fsS -o /dev/null --max-time 10 "${mirror%/}/dists/$codename/InRelease"; then
+      answering+=("$mirror")
+    else
+      echo "::warning::the package mirror $mirror isn't answering; skipping it"
+    fi
+  done < "$list"
+  answering+=("$fallback")
+  for i in "${!answering[@]}"; do
+    printf '%s\tpriority:%s\n' "${answering[$i]}" "$(( i + 1 ))"
+  done | sudo tee "$list" >/dev/null
+  echo "Package mirrors, in order:"
+  cat "$list"
 fi
-[[ -f "$list" ]] && { echo "Package mirrors, in order:"; cat "$list"; }
 
-opts=(-o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=3)
+# The loop below retries; apt itself gives up on a silent server quickly.
+opts=(-o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=1)
 for attempt in 1 2 3; do
   if sudo apt-get "${opts[@]}" update && sudo apt-get "${opts[@]}" install -y "$@"; then
     exit 0
