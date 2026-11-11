@@ -575,6 +575,9 @@ def test_clicking_the_popup_shows_the_file_in_its_folder(app):
 def test_a_2_0_config_still_works(app):
     # 2.0 wrote [hotkey] capture = ...; it must keep working.
     app.wait_log("Global hotkey Region registered: Ctrl+Alt+R")
+    # Region is registered first; pressing before the rest are, and before
+    # X applies the grab, raced the app (it failed on CI, not locally).
+    app.ready()
     key("ctrl+alt+r")
     wait_for(overlays, what="overlay from the 2.0 binding")
     key("Escape")
