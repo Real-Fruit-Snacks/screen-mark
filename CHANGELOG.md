@@ -123,7 +123,7 @@ Everything needed to run and build screen-mark with no internet access is now in
 
 ### Changed
 - **Renamed to `screen-mark`.** Binary, crate, repo, config directory (`screen-mark/`), history directory, env var (`SCREEN_MARK_IMGUR_CLIENT_ID`; the old name still works), autostart entry, Start Menu entry, and MSI product name. On first run, a 1.x config and history are copied across and the 1.x autostart entry is replaced; the 2.0 MSI upgrades a 1.x MSI install. A 1.x portable self-install is left in place — run `hydroshot uninstall` once.
-- Retheme to the RFS palettes, **Nightshift** (dark) and **Dayshift** (light), with Ember as the one accent, per [BRAND.md](https://github.com/Real-Fruit-Snacks/.github/blob/main/BRAND.md). Replaces Terminal Workbench across the app, the website, the cover art, the favicon, and the app icon. Annotation presets keep their names; `green` is now Mint `#3ddc97`, `yellow` is Amber `#ffc247`, `blue` is `#5cb8ff`. Existing `default_color` values in `config.toml` keep working.
+- Retheme to the RFS palettes, **Nightshift** (dark) and **Dayshift** (light), with Ember as the one accent, per [BRAND.md](https://github.com/Real-Fruit-Snacks/rfs-brand/blob/main/BRAND.md). Replaces Terminal Workbench across the app, the website, the cover art, the favicon, and the app icon. Annotation presets keep their names; `green` is now Mint `#3ddc97`, `yellow` is Amber `#ffc247`, `blue` is `#5cb8ff`. Existing `default_color` values in `config.toml` keep working.
 - Website set in IBM Plex Sans / Plex Mono (vendored, still offline). Site and README copy rewritten to the RFS house voice; repo renamed `hydroshot`.
 - App icon is a flat Ember drop in a graphite tile; no gradients.
 - `hydroshot --version` now works.
