@@ -2,6 +2,16 @@
 
 All notable changes to screen-mark will be documented in this file.
 
+## [2.4.1] - 2026-11-13
+
+A release now carries only the downloads. The application is the same as 2.4.0.
+
+### Changed
+- The release page lists the Windows installer and zip, the Linux build, `SHA256SUMS.txt`, and `latest.json` with its signature for the updater.
+
+### Removed
+- `screen-mark-vX.Y.Z-source-vendored.tar.gz` and `screen-mark-vX.Y.Z-website.zip` are no longer published. The source bundle held prebuilt test files from the crates it copied, which some scanners flag. *Building with no internet* in the README shows how to make the same bundle with `cargo vendor`, and any folder that holds a release's downloads and `latest.json` can still serve updates.
+
 ## [2.4.0] - 2026-11-11
 
 Images that are already there can be marked up, History can bring a capture back with its annotations still editable, shapes can be dashed or filled, and capture works on Wayland.
