@@ -46,6 +46,7 @@ cargo fmt --check
 
 - Add a line to `CHANGELOG.md` under an `Unreleased` heading.
 - Update the README if a command, key, or config key changed.
+- The animated panel at the top of the README (`docs/assets/panel-{dark,light}.svg`) is drawn by `docs/art/make-panel.py`. If a key, a tool or the copy popup it shows changes, change the script and run it rather than editing the SVGs; CI checks they match: `python -m pip install -r docs/art/requirements.txt`, then `python docs/art/make-panel.py`.
 - Keep platform-specific code behind `cfg` in `src/capture/` or the module that already owns it.
 
 ## Commits and PRs

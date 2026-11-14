@@ -3,8 +3,8 @@
 Screenshot capture and annotation in pure Rust
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/cover-dark.svg">
-  <img alt="screen-mark capture overlay: a dimmed desktop, an Ember-bordered selection, an arrow, a box, and a step marker, with the tool bar beneath" src="docs/assets/cover-light.svg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/panel-dark.svg">
+  <img alt="screen-mark taking a screenshot: Ctrl+Shift+S dims the screen, a region is dragged over a chart with its size shown, then an arrow, a box and step marker 1 are drawn from the toolbar, and Ctrl+C copies it, closing the overlay with a Copied popup" src="docs/assets/panel-light.svg" width="100%">
 </picture>
 
 Windows: download `screen-mark-vX.Y.Z-windows-x64.msi` (installer) or `.zip` (portable) from [Releases](https://github.com/Real-Fruit-Snacks/screen-mark/releases/latest). Linux: `screen-mark-vX.Y.Z-linux-x64.tar.gz` from the same page. Or build it:
