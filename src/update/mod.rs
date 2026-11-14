@@ -155,8 +155,8 @@ pub fn proxy_for(url: &str) -> Option<String> {
 pub enum Source {
     /// The project's GitHub releases.
     GitHub,
-    /// A web folder that holds `latest.json` and the downloads side by
-    /// side, such as the `downloads/` folder of the website bundle.
+    /// A web folder that holds `latest.json`, its signature and the
+    /// downloads side by side.
     Web(String),
     /// The same on a disk or a network share.
     Folder(PathBuf),

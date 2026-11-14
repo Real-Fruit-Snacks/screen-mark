@@ -97,7 +97,7 @@ The version that was replaced stays beside the new one, as `screen-mark.old.exe`
 
 How a copy updates depends on how it was installed. One screen-mark installed itself, or one unpacked from the zip or tar.gz, has its program file replaced. One installed with the MSI runs the new MSI, so Windows' list of installed apps stays right. A copy from Scoop, winget or Chocolatey, or in a folder screen-mark can't write to, is left alone: screen-mark says there is a new version and leaves installing it to the package manager, or to you.
 
-To update from somewhere other than GitHub, set `url` under `[updates]` to a web folder or a folder path that holds `latest.json`, `latest.json.sig` and the release's downloads. The `docs/downloads/` folder of the website zip is one. A folder or share can also be picked with *Folder* next to *From* in Settings › General, and *GitHub* goes back. The signature is checked the same way, so plain `http://` or a file share is fine. `screen-mark update --from <folder or URL>` updates from somewhere else once, without changing the setting.
+To update from somewhere other than GitHub, set `url` under `[updates]` to a web folder or a folder path that holds `latest.json`, `latest.json.sig` and the release's downloads. A folder or share can also be picked with *Folder* next to *From* in Settings › General, and *GitHub* goes back. The signature is checked the same way, so plain `http://` or a file share is fine. `screen-mark update --from <folder or URL>` updates from somewhere else once, without changing the setting.
 
 Behind a proxy, updates use the one in `HTTPS_PROXY` / `HTTP_PROXY` (with `NO_PROXY`) or, on Windows, the one in Settings › Network & internet › Proxy. A proxy that a setup script (PAC) or automatic detection provides isn't read: put it in `proxy` under `[updates]` (`proxy = "http://proxy.example:8080"`), or `proxy = "none"` to go direct. Connections to GitHub are checked against the certificates built into screen-mark, not the ones Windows trusts, so a network that inspects HTTPS breaks them; on one of those, serve updates from an internal `http://` folder or a file share instead.
 
@@ -129,22 +129,27 @@ Everything on the release page works with no internet access. Only Imgur upload 
 
 - **Windows:** the exe needs Windows 10 or later and nothing else, not even the Visual C++ Redistributable. The `.zip` and the MSI also carry this README, the changelog, the licence and `THIRD-PARTY-LICENSES.txt`.
 - **Linux:** the binary uses the system's GTK 3, libxdo, the X11 part of libxkbcommon (for the keyboard) and an AppIndicator library for the tray. Without libxkbcommon-x11 it stops at start with "Library libxkbcommon-x11.so could not be loaded". On Ubuntu, install them with `sudo apt install libxdo3 libxkbcommon-x11-0 libayatana-appindicator3-1` (GTK 3 comes with the desktop) before going offline.
-- **Website:** `screen-mark-vX.Y.Z-website.zip` is the whole site, with that release's downloads inside `docs/downloads/`, for an internal web server. Its `.gitlab-ci.yml` publishes it with GitLab Pages.
-- **Updates:** `docs/downloads/` in the website zip also holds `latest.json` and its signature, so the same internal server can serve updates. Point screen-mark at it with `url` under `[updates]` (see [Updating](#updating)).
-- **Checksums:** `SHA256SUMS.txt` lists every file on the release. Check with `sha256sum -c SHA256SUMS.txt --ignore-missing` on Linux, or compare `Get-FileHash <file>` in PowerShell.
+- **Updates:** copy a release's downloads, `latest.json` and `latest.json.sig` into one folder on an internal web server or a file share, and that folder can serve updates. Point screen-mark at it with `url` under `[updates]` (see [Updating](#updating)).
+- **Checksums:** `SHA256SUMS.txt` lists the release's downloads. Check with `sha256sum -c SHA256SUMS.txt --ignore-missing` on Linux, or compare `Get-FileHash <file>` in PowerShell.
 
 ### Building with no internet
 
-`screen-mark-vX.Y.Z-source-vendored.tar.gz` is the source plus every crate it depends on, in `vendor/`. Its `.cargo/config.toml` points cargo there, so no download is needed. Each release checks that it builds with networking switched off. Bring these onto the machine first:
+A release carries only the built downloads, so fetch the source and the crates it depends on while online, then carry the folder across:
 
-- **Rust.** `BUILT-WITH.txt` in the bundle names the version the release was built with. The [standalone installers](https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers) work offline.
+```sh
+git clone --branch vX.Y.Z https://github.com/Real-Fruit-Snacks/screen-mark
+cd screen-mark
+cargo vendor --locked vendor >> .cargo/config.toml
+```
+
+`cargo vendor` puts every crate in `vendor/` and the lines it adds to `.cargo/config.toml` point cargo there. Bring these onto the machine too:
+
+- **Rust** 1.88 or later. The [standalone installers](https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers) work offline.
 - **Windows:** Visual Studio Build Tools with the *Desktop development with C++* workload. `vs_buildtools.exe --layout <folder>` makes an offline installer.
 - **Linux:** `libgtk-3-dev libxdo-dev libxkbcommon-dev libwayland-dev libglib2.0-dev` (Ubuntu package names).
 - **The MSI only:** `cargo-wix` and the WiX Toolset 3. Install `cargo-wix` while online (`cargo install cargo-wix`). The exe itself needs neither.
 
 ```sh
-tar -xzf screen-mark-vX.Y.Z-source-vendored.tar.gz
-cd screen-mark-vX.Y.Z
 cargo build --release --offline
 cargo test --offline
 ```
