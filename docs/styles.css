@@ -117,7 +117,7 @@
 
 /* ---------- Base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html { height: 100%; overflow: hidden; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   margin: 0;
   background: var(--rfs-bg);
@@ -270,7 +270,7 @@ kbd {
   .stage .phone-note { order: 1; }
 }
 
-.capture { position: relative; align-self: flex-start; max-width: 40rem; padding: var(--cap-pad); margin-left: calc(-1 * var(--cap-pull)); }
+.capture { position: relative; align-self: flex-start; width: 100%; max-width: 48rem; padding: var(--cap-pad); margin-left: calc(-1 * var(--cap-pull)); }
 .lede { font-size: var(--step-2); font-weight: 600; line-height: 1.18; letter-spacing: -0.015em; text-wrap: balance; max-width: 24em; }
 .how { margin-top: var(--space-s); color: var(--rfs-mute); max-width: 36em; }
 .how kbd { color: var(--rfs-text); }
