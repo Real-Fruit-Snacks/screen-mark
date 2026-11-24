@@ -8,7 +8,7 @@ body:
     attributes:
       label: Version
       description: Output of `screen-mark --version`, or the release tag
-      placeholder: v2.4.1
+      placeholder: v2.4.2
     validations:
       required: true
 

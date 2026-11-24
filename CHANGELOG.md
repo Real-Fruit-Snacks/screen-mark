@@ -2,6 +2,14 @@
 
 All notable changes to screen-mark will be documented in this file.
 
+## [2.4.2] - 2026-11-24
+
+Visual refresh to the Cyclorama Dawn `v2.1.0` palette. Capture, annotation, hotkeys, and configuration behaviour are unchanged.
+
+### Changed
+- Overlay toolbar, markup presets, settings UI, and application/tray icons updated to Cyclorama Dawn `v2.1.0` (`LX 263` Matte Dark, Glacial Steel, Maritime Beacon Orange, Signal Crimson faults) with WCAG AA (`≥ 4.5:1`) contrast verified across all theme pairs.
+- Project page and README panel updated to Cyclorama Dawn `v2.1.0` with a below-header scroll shell and border-box gradient CTAs.
+
 ## [2.4.1] - 2026-11-13
 
 A release now carries only the downloads. The application is the same as 2.4.0.
