@@ -58,8 +58,7 @@
   --cross-line: color-mix(in oklab, var(--sm-accent) 55%, transparent);
 
   --stage-bg:
-    radial-gradient(ellipse 68% 60% at 10% 10%, color-mix(in oklab, var(--rfs-steel) 26%, transparent), transparent 72%),
-    radial-gradient(ellipse 62% 56% at 92% 16%, color-mix(in oklab, var(--rfs-beacon) 18%, transparent), transparent 72%),
+    linear-gradient(125deg in oklab, color-mix(in oklab, var(--rfs-steel) 20%, transparent) 0%, transparent 48%, color-mix(in oklab, var(--rfs-beacon) 14%, transparent) 100%),
     var(--rfs-surface);
 
   --marker-ink: #050507;
@@ -105,8 +104,7 @@
 :root[data-theme="light"] {
   --dim: rgb(17 20 27 / 0.28);
   --stage-bg:
-    radial-gradient(ellipse 68% 60% at 10% 10%, color-mix(in oklab, var(--rfs-steel) 12%, transparent), transparent 72%),
-    radial-gradient(ellipse 62% 56% at 92% 16%, color-mix(in oklab, var(--rfs-beacon) 10%, transparent), transparent 72%),
+    linear-gradient(125deg in oklab, color-mix(in oklab, var(--rfs-steel) 10%, transparent) 0%, transparent 48%, color-mix(in oklab, var(--rfs-beacon) 8%, transparent) 100%),
     var(--rfs-bg);
   --marker-ink: #050507;
   --hl: color-mix(in oklab, #FFC247 55%, transparent);
@@ -277,9 +275,12 @@ kbd {
 .get { position: relative; width: fit-content; margin-top: var(--space-m); }
 .btn {
   display: inline-flex; align-items: center; min-height: 48px; padding: 0.72em 1.4em;
-  background: var(--rfs-horizon-gradient); color: #FFFFFF;
+  background-image: var(--rfs-horizon-gradient);
+  background-origin: border-box;
+  background-clip: border-box;
+  color: #FFFFFF;
   font-weight: 700; letter-spacing: 0.01em; text-decoration: none; border-radius: 6px;
-  border: 1px solid color-mix(in oklab, var(--rfs-beacon-ink) 35%, transparent);
+  border: 0;
   transition: filter var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
 @media (hover: hover) { .btn:hover { color: #FFFFFF; filter: brightness(1.08); transform: translateY(-1px); } }
