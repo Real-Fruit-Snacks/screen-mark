@@ -2,14 +2,15 @@
 
 ## Concept
 The page is a screen that screen-mark is in the middle of capturing. The first screen sits under the
-app's real capture overlay: dimmed (40% black as in the app; on Dayshift 30% of the warm ink colour,
-because paper under 40% black reads as a disabled page), an Ember selection around the download block with its live `W × H` readout, the
-24-button toolbar under it (above it when the bottom of the screen is in the way and the name isn't, as
-the app does), and an arrow already drawn. The download button itself is never dimmed, and the name
-stays lit while the selection is the one on the download block; a selection of your own dims it like
-the rest. On Nightshift the stage sits on `--rfs-surface` so the dim visibly darkens it; the stage
-ends on a hairline. Visitors can
-drag their own selection and draw on the page with the app's keys. Everything below the first screen is plain,
+app's real capture overlay: dimmed (42% black on `LX 263` dark; 28% cool ink on `LX 512` light,
+because alabaster under 42% black reads as a disabled page), a Beacon Orange selection around the
+download block with its live `W × H` readout, the 24-button toolbar under it (above it when the
+bottom of the screen is in the way and the name isn't, as the app does), and an arrow already drawn.
+The pinned top bar (`rfs-shell-header`) stays above the scroll region (`rfs-scroll-region`) so the
+scrollbar never enters the header and the `LX 263 DARK / LX 512 LIGHT` toggle is always reachable.
+The download button itself is never dimmed, and the name stays lit while the selection is the one on
+the download block; a selection of your own dims it like the rest. Visitors can drag their own
+selection and draw on the page with the app's keys. Everything below the first screen is plain,
 specific and set like a well-made manual. The visitor should leave knowing the three hotkeys and the
 fifteen tool keys, and having already used the overlay once.
 
@@ -20,42 +21,33 @@ single native exe. Primary action: **Download for Windows** (the latest release)
 tarball and `cargo install`.
 
 ## Type
-- Display and text: **Bricolage Grotesque** (variable, `opsz` 12–96, `wght` 400–800), self-hosted.
-  At display sizes the optical-size axis gives compressed, heavy letters with ink traps, so
-  "screen-mark" can fill the stage. At text size the same family is calm and open. IBM Plex is the
-  RFS house face, so it is deliberately not used here.
-- Mono: **Azeret Mono** (`wght` 400–600), self-hosted. Used for key caps, readouts, file names,
-  commands and the toolbar's size pill. Its ligatures are off everywhere: they turn `(R)` into ® and
-  join the fi in `config`. It's wide and screen-like, and its numerals stay legible at small sizes.
-- Scale: `scripts/scale.mjs` with 16→18px base and ratio 1.2→1.333. The wordmark and the keycaps in the
-  hotkeys section use hand-written clamps beyond the scale. Nothing is set below 12px.
+- Display: **Big Shoulders Stencil** (variable `wght` 100–900), self-hosted (`docs/assets/fonts/`). Used for the stage wordmark, section headings, and header brand.
+- Body: **Albert Sans** (variable `wght` 100–900), self-hosted. Clean geometric sans for body copy, lede, and UI labels.
+- Mono: **Azeret Mono** (variable `wght` 100–900), self-hosted. Used for key caps, readouts, file names, commands and the toolbar's size pill. Its ligatures are off everywhere: they turn `(R)` into ® and join the fi in `config`.
 
 ## Color
-The RFS Nightshift / Dayshift color tokens, pasted verbatim from `rfs-brand/brand/tokens/rfs.css`
-(v1.2.0). Only the colors come from RFS: no Plex, no dot grid, no RFS layout or mark. Dark or light
-follows the system setting.
+Canonical **Cyclorama Dawn `v2.1.0`** tokens loaded from `rfs.css` + `rfs-components.css` (`Real-Fruit-Snacks/rfs-brand`). Matte Dark `LX 263` (`#050507`) is the explicit default (`<meta name="color-scheme" content="dark">`); Alabaster Day `LX 512` (`#F5F7F9`) is an opt-in toggle synchronized across tabs via `localStorage['rfs-theme']` with a radial View Transition.
 
 | Role | Token | Use |
 |---|---|---|
-| bg | `--rfs-bg` | Page |
-| surface | `--rfs-surface` | Toolbar, toast, key caps |
-| raised | `--rfs-raised` | Unlit keys, code |
+| bg | `--rfs-bg` | Page (`#050507` dark / `#F5F7F9` light) |
+| surface | `--rfs-surface` | Stage backdrop, toolbar, toast, key caps (`#0D0E12` / `#FFFFFF`) |
+| raised | `--rfs-raised` | Hover surfaces, unlit accents (`#161820` / `#E9EEF3`) |
 | line / line-strong | `--rfs-line`, `--rfs-line-strong` | Rules; key and control borders |
-| text / mute | `--rfs-text`, `--rfs-mute` | Copy |
-| primary (Ember) | `--rfs-primary` (+ hover, press, on-primary) | The capture selection, the crosshair, the download button, focus rings |
-| accent (Amber) | `--rfs-accent` | The quote's highlighter band. Annotations and step markers (hero and Install) use `#FFC247`, Nightshift's accent and the app's yellow preset, in both schemes |
+| text / mute | `--rfs-text`, `--rfs-mute` | Copy (`#F2F4F8` / `#8F95A6` dark; `#11141B` / `#535B69` light) |
+| Beacon Orange | `--rfs-beacon-ink`, `--rfs-horizon-gradient` | Capture selection, crosshair, primary CTA gradient (Cartesian `in oklab`), focus accents |
+| Glacial Steel | `--rfs-steel-ink`, `--rfs-steel` | Links, stage left ambient horizon wash, blue annotation preset (`#74B8E8`) |
+| Signal Crimson | `--rfs-fault` (`#FF5C6C` / `#B91C2E`) | Red annotation preset (`#FF5C6C`) and fault indicators |
+| Amber | `--rfs-accent` (`#FFC247` / `#885800`) | Quote highlighter band; annotations and step markers use `#FFC247` in both schemes |
 
-Rules: Ember means "capture/selection" or "the one action" and nothing else. Annotations are the app's yellow.
-The toolbar's five swatches are the app's real presets (`#ff6e7a #5cb8ff #3ddc97 #ffc247 #b78cff`),
-because the toolbar depicts the shipping product; these are the only non-RFS values on the page.
-No gradients.
+Rules: Beacon Orange means "capture/selection" or "the one action" and nothing else. Annotations default to the app's yellow (`#FFC247`). The toolbar's five swatches are the app's real Cyclorama Dawn presets (`#ff5c6c #74b8e8 #3ddc97 #ffc247 #b78cff`), matching `src/geometry.rs`. All gradients are Cartesian `in oklab` (never `in oklch`).
 
 Text left outside the selection on the first screen is dimmed by the overlay, so it must use `text`
 (not `mute`) to stay AA under the dim. Focus rings there sit on a halo of page colour so they read
 against the dim.
 
 Annotations, the hero arrow and step marker 1 are drawn in the app's yellow in both schemes, as in a
-real screenshot; on Dayshift they get a thin dark edge so they hold up on paper. The highlighter draws
+real screenshot; on `LX 512` light they get a thin dark edge so they hold up on alabaster. The highlighter draws
 at 40% opacity: a web page can't multiply into the pixels under it, so it is see-through instead.
 While the download block is outside the selection, its muted text switches to `text`.
 
@@ -133,11 +125,8 @@ what it doesn't do. No exclamation marks, no emoji, no "powerful/seamless/modern
 ## Maintenance
 - **On every release:** the version appears in the hero's download link and meta line, the three
   file links and names in Install, and the footer. Search `index.html` for the old version.
-- **Link preview:** `assets/og.png` is the first screen rendered by Chromium at 1600×840 and 0.75
-  scale (1200×630), in dark mode, after the entrance, with the popup hidden. Re-render it if the hero
-  changes.
-- **Icons:** `icon.svg` and `favicon.ico` use a reduced mark (corner brackets and a heavier
-  arrow on a 32-unit grid) so they read at 16px. The PNG app icons use the full mark.
+- **Link preview:** `assets/social-dark.png` (`1280×640`) is generated from `docs/assets/cover.toml` by `rfs-brand/tools/make-cover.py`.
+- **Icons:** Web icons (`icon.svg`, `favicon.ico`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`) come from `rfs-brand/brand/web/`; desktop app icons (`assets/icon.png` and `docs/icon_256.png`) are generated by `cargo run --example generate_icon`.
 
 ## Alternatives considered
 - **Marked-up bug report:** the page as a ticket with annotated screenshots attached, set in a

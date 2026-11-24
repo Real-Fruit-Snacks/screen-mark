@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050507">
 <title>screen-mark: screenshot capture and annotation in pure Rust</title>
 <meta name="description" content="A native screenshot tool for Windows and Linux (X11). Ctrl+PrintScreen saves and copies; Ctrl+Shift+S opens an overlay with fifteen annotation tools, one key each. OCR, pin, Imgur upload. MIT.">
 <meta name="keywords" content="screen-mark, screenshot, annotation, Rust, capture, OCR, tiny-skia, winit">
@@ -10,24 +12,40 @@
 <meta property="og:url" content="https://real-fruit-snacks.github.io/screen-mark/">
 <meta property="og:title" content="screen-mark: screenshot capture and annotation in pure Rust">
 <meta property="og:description" content="Ctrl+PrintScreen saves and copies. Ctrl+Shift+S opens the overlay: drag a region, draw on it, press Enter. Windows and Linux (X11).">
-<meta property="og:image" content="https://real-fruit-snacks.github.io/screen-mark/assets/og.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The screen-mark website under its own capture overlay: a dimmed page, an Ember selection around the download button, and the annotation toolbar.">
+<meta property="og:image" content="https://real-fruit-snacks.github.io/screen-mark/assets/social-dark.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="screen-mark Cyclorama Dawn cover showing screenshot capture and annotation in pure Rust.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#0C0D10" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#F6F5F2" media="(prefers-color-scheme: light)">
 <link rel="icon" href="favicon.ico" sizes="32x32">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="preload" href="assets/fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/big-shoulders-stencil-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/albert-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/azeret-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
+<script>
+(function(){
+  var d=document.documentElement;
+  d.classList.add('js');
+  setTimeout(function(){if(!window.smReady)d.classList.remove('js')},4000);
+  try{
+    if(localStorage.getItem('rfs-theme')==='light'){
+      d.setAttribute('data-theme','light');
+      var cs=document.querySelector('meta[name="color-scheme"]');
+      var tc=document.querySelector('meta[name="theme-color"]');
+      if(cs)cs.content='light';
+      if(tc)tc.content='#F5F7F9';
+    }
+  }catch(_){}
+})();
+</script>
+<link rel="stylesheet" href="rfs.css">
+<link rel="stylesheet" href="rfs-components.css">
 <link rel="stylesheet" href="styles.css">
-<script>document.documentElement.classList.add('js');setTimeout(function(){if(!window.smReady)document.documentElement.classList.remove('js')},4000)</script>
 <script src="script.js" defer></script>
 </head>
-<body>
+<body class="rfs-shell">
 
 <svg width="0" height="0" class="sprite" aria-hidden="true" focusable="false">
   <!-- Lucide icons (ISC licence), the same paths the app's toolbar renders (src/icons.rs) -->
@@ -55,24 +73,29 @@
   </defs>
 </svg>
 
-<a class="skip" href="#top">Skip to content</a>
+<a class="rfs-skip" href="#top">Skip to content</a>
 
-<header class="bar" data-window>
+<header class="rfs-shell-header bar">
   <div class="wrap bar__in">
-    <a class="brand" href="./"><img src="icon.svg" width="28" height="28" alt=""><span>screen-mark</span></a>
-    <nav aria-label="On this page">
-      <a href="#features">Tools</a>
-      <a href="#install">Install</a>
-      <a href="#known-issues"><span class="nav-long">Known issues</span><span class="nav-short" aria-hidden="true">Issues</span></a>
-      <a href="https://github.com/Real-Fruit-Snacks/screen-mark">GitHub</a>
+    <a class="brand" href="./"><img src="icon.svg" width="28" height="28" alt=""><span>SCREEN-MARK</span></a>
+    <nav class="bar__nav" aria-label="On this page">
+      <a class="nav-link" href="#features">Tools</a>
+      <a class="nav-link" href="#install">Install</a>
+      <a class="nav-link" href="#known-issues"><span class="nav-long">Known issues</span><span class="nav-short" aria-hidden="true">Issues</span></a>
+      <a class="nav-link" href="https://github.com/Real-Fruit-Snacks/screen-mark">GitHub</a>
+      <button type="button" class="theme-btn" id="theme-toggle" aria-label="Switch to Light mode" aria-pressed="false">
+        <span class="theme-swatch" aria-hidden="true"></span>
+        <span class="theme-label">LX 263 DARK</span>
+      </button>
     </nav>
   </div>
 </header>
 
+<div class="rfs-scroll-region" id="page-scroll">
 <main>
   <section class="stage" id="top" aria-labelledby="title" data-stage>
     <div class="wrap stage__in">
-      <h1 class="wordmark" id="title" data-window>screen-mark</h1>
+      <h1 class="wordmark" id="title" data-window>SCREEN-MARK</h1>
 
       <div class="capture" data-capture data-window>
         <p class="lede">Free, open-source screenshot capture and annotation for Windows and Linux&nbsp;(X11), in pure&nbsp;Rust.</p>
@@ -107,8 +130,8 @@
         <button type="button" data-tool="eyedropper" aria-label="Eyedropper (I)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-eyedropper"/></svg></button>
         <button type="button" data-tool="measure" aria-label="Measurement (M)" class="x-md"><svg aria-hidden="true" focusable="false"><use href="#i-measure"/></svg></button>
         <button type="button" data-tool="redact" aria-label="Redact (X)" class="x-md sep"><svg aria-hidden="true" focusable="false"><use href="#i-redact"/></svg></button>
-        <button type="button" data-color="#ff6e7a" aria-label="Red" aria-pressed="false" class="swatch" style="--c:#ff6e7a"></button>
-        <button type="button" data-color="#5cb8ff" aria-label="Blue" aria-pressed="false" class="swatch x-xs" style="--c:#5cb8ff"></button>
+        <button type="button" data-color="#ff5c6c" aria-label="Red" aria-pressed="false" class="swatch" style="--c:#ff5c6c"></button>
+        <button type="button" data-color="#74b8e8" aria-label="Blue" aria-pressed="false" class="swatch x-xs" style="--c:#74b8e8"></button>
         <button type="button" data-color="#3ddc97" aria-label="Green" aria-pressed="false" class="swatch x-xs" style="--c:#3ddc97"></button>
         <button type="button" data-color="amber" aria-label="Yellow" class="swatch" style="--c:var(--draw)" aria-pressed="true"></button>
         <button type="button" data-color="#b78cff" aria-label="Mauve" aria-pressed="false" class="swatch sep" style="--c:#b78cff"></button>
@@ -130,7 +153,7 @@
 
   <section class="hotkeys" id="how" aria-labelledby="how-h">
     <div class="wrap">
-      <h2 id="how-h">Three hotkeys</h2>
+      <h2 id="how-h">THREE HOTKEYS</h2>
 
       <div class="hk">
         <p class="caps"><kbd>Ctrl</kbd><kbd>PrtSc</kbd></p>
@@ -177,7 +200,7 @@
   <section class="tools" id="features" aria-labelledby="tools-h">
     <div class="wrap">
       <div class="tools__head">
-        <h2 id="tools-h">Fifteen tools, one key each</h2>
+        <h2 id="tools-h">FIFTEEN TOOLS, ONE KEY EACH</h2>
         <p>In the overlay every tool has a single key.<span class="js-only"> Click or tap a key below: it lights up and becomes the tool in the overlay at the top of this page. Once you’ve clicked one, the letters on your keyboard work too.</span></p>
       </div>
 
@@ -234,14 +257,14 @@
         <p><kbd>Ctrl+Z</kbd> and <kbd>Ctrl+Shift+Z</kbd> undo and redo, so nothing you draw is final until you copy. The scroll wheel changes the tool size. Highlight multiplies like a real highlighter, so dark text stays readable. Step markers number themselves.</p>
         <p>Redact draws a solid box, and nothing under it reaches the copy. Pixelate only blurs, which is fine for a face in a crowd and not for a password. Rectangles, circles, lines and arrows can be an outline, dashed or filled: <kbd>D</kbd> switches. Hold <kbd>Shift</kbd> for squares, circles and lines at 15° steps. The arrow keys move the pointer, the region or the selected annotation one pixel at a time, ten with <kbd>Shift</kbd>, and a magnifier shows the pixels under the pointer while you place the region.</p>
         <p>Every key is rebindable in Settings › Keys: click a binding and press the new combination. Settings refuses a combination another binding already uses, one Windows keeps for itself <span class="nowrap">(<kbd>Alt+Tab</kbd>,</span> <kbd>Win+L</kbd>), or a global hotkey another app has registered, and says which.</p>
-        <p>Dark and light modes, Nightshift and Dayshift from the <a href="https://github.com/Real-Fruit-Snacks/rfs-brand/blob/main/BRAND.md">RFS palettes</a>. Five annotation colours, or any <code>#rrggbb</code>.</p>
+        <p>Dark and light modes, Cyclorama Dawn (LX 263 dark and LX 512 light) from the <a href="https://real-fruit-snacks.github.io/rfs-brand/">RFS brand system</a>. Five annotation colours, or any <code>#rrggbb</code>.</p>
       </div>
     </div>
   </section>
 
   <section class="after" aria-labelledby="after-h">
     <div class="wrap after__in">
-      <h2 id="after-h">After the capture</h2>
+      <h2 id="after-h">AFTER THE CAPTURE</h2>
       <dl class="spec">
         <div><dt>Copy</dt><dd><kbd>Enter</kbd> or <kbd>Ctrl+C</kbd>. The selection and everything drawn on it, ready to paste.</dd></div>
         <div><dt>Save</dt><dd><kbd>Ctrl+S</kbd>. A PNG, JPEG or WebP save dialog, or straight into your captures folder if you turn the dialog off.</dd></div>
@@ -268,7 +291,7 @@
   <section class="install" id="install" aria-labelledby="install-h">
     <div class="wrap install__in">
       <div class="install__head">
-        <h2 id="install-h">Install</h2>
+        <h2 id="install-h">INSTALL</h2>
         <ol class="steps">
           <li><span>Download the installer and run it. It installs for your user only, so it doesn’t ask for admin rights.</span></li>
           <li><span>Open screen-mark from the Start menu. It starts in the tray, by the clock; Windows may tuck the icon under the <kbd>^</kbd> arrow there.</span></li>
@@ -299,10 +322,14 @@
 
         <div class="cargo" id="source">
           <p id="cargo-l">Or build it from source with <a href="https://rustup.rs">Rust</a> 1.88 or later:</p>
-          <div class="cmd">
-            <pre><code>cargo install --git <wbr>https://github.com/<wbr><span class="nowrap">Real-Fruit-Snacks</span>/<wbr><span class="nowrap">screen-mark</span> <span class="nowrap">--locked</span></code></pre>
-            <button type="button" class="copy" aria-label="Copy the cargo command" data-copy="cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked">Copy</button>
-          </div>        </div>
+          <div class="rfs-code-card">
+            <div class="rfs-code-head">
+              <span class="rfs-code-lang">SHELL</span>
+              <button type="button" class="rfs-code-copy copy" aria-label="Copy the cargo command" data-copy="cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked">Copy</button>
+            </div>
+            <pre><code><span class="rfs-tok-cmd">cargo</span> install <span class="rfs-tok-flag">--git</span> https://github.com/Real-Fruit-Snacks/screen-mark <span class="rfs-tok-flag">--locked</span></code></pre>
+          </div>
+        </div>
 
         <h3>From the command line</h3>
         <dl class="cli">
@@ -321,7 +348,7 @@
   <section class="limits" id="known-issues" aria-label="Tested on and known issues">
     <div class="wrap limits__in">
       <div>
-        <h2>Tested on</h2>
+        <h2>TESTED ON</h2>
         <ul class="plain">
           <li><b>Windows 11</b>, Rust stable. My daily machine; every release is used in anger before it’s tagged.</li>
           <li><b>Windows Server 2025</b>, Rust stable. CI builds, tests and runs clippy on every push.</li>
@@ -331,7 +358,7 @@
         </ul>
       </div>
       <div>
-        <h2>Known issues</h2>
+        <h2>KNOWN ISSUES</h2>
         <ul class="plain">
           <li>Linux capture is experimental. Multi-monitor and HiDPI aren’t verified there. Wayland has no global hotkeys: bind a desktop shortcut to <code>screen-mark capture</code>.</li>
           <li>OCR is Windows only and needs the OCR language pack for your display language.</li>
@@ -348,10 +375,13 @@
 
 <footer class="foot">
   <div class="wrap foot__in">
-    <p class="foot__name">screen-mark 2.4.1 &middot; MIT &middot; an <a href="https://github.com/Real-Fruit-Snacks">RFS</a> tool</p>
+    <p class="foot__name">screen-mark 2.4.1 &middot; MIT &middot; an <a href="https://real-fruit-snacks.github.io/">RFS</a> tool</p>
     <p class="foot__links"><a href="https://github.com/Real-Fruit-Snacks/screen-mark">Source</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases">Releases</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/CHANGELOG.md">Changelog</a></p>
-    <p class="foot__colophon">Set in Bricolage Grotesque and Azeret Mono. Toolbar icons from Lucide, the same set the app draws.</p>
+    <p class="foot__colophon">Set in Big Shoulders Stencil, Albert Sans, and Azeret Mono. Toolbar icons from Lucide, the same set the app draws.</p>
   </div>
 </footer>
+</div>
+
+<div id="rfs-toast" class="rfs-toast is-ok" role="status" aria-live="polite" popover="manual"></div>
 </body>
 </html>

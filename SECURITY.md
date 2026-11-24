@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest release on the `1.x` line gets fixes. Anything older: upgrade first, then report if it still reproduces.
+Only the latest release on the `2.x` line gets fixes. Anything older: upgrade first, then report if it still reproduces.
 
 ## Reporting
 

@@ -17,10 +17,10 @@ fn test_size_creation() {
 #[test]
 fn test_color_red() {
     let c = Color::red();
-    // preset red #ff6e7a
+    // preset red #ff5c6c (Signal Crimson)
     assert!((c.r - 1.0).abs() < 0.01);
-    assert!((c.g - 0.431).abs() < 0.01);
-    assert!((c.b - 0.478).abs() < 0.01);
+    assert!((c.g - 0.361).abs() < 0.01);
+    assert!((c.b - 0.424).abs() < 0.01);
     assert_eq!(c.a, 1.0);
 }
 

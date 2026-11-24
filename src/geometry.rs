@@ -41,13 +41,14 @@ impl Color {
     }
 
     // Annotation ink. Named presets keep their hue so existing config files
-    // keep meaning the same thing; green and yellow are the RFS Mint and Amber.
+    // keep meaning the same thing; red is Signal Crimson, blue is Glacial Steel,
+    // green is Mint, and yellow is Amber from Cyclorama Dawn v2.1.0.
     pub fn red() -> Self {
-        Self::new(1.0, 0.431, 0.478, 1.0) // #ff6e7a
+        Self::new(1.0, 0.361, 0.424, 1.0) // #ff5c6c (Signal Crimson)
     }
 
     pub fn blue() -> Self {
-        Self::new(0.361, 0.722, 1.0, 1.0) // #5cb8ff
+        Self::new(0.455, 0.722, 0.910, 1.0) // #74b8e8 (Glacial Steel)
     }
 
     pub fn green() -> Self {
@@ -59,7 +60,7 @@ impl Color {
     }
 
     pub fn white() -> Self {
-        Self::new(0.910, 0.902, 0.882, 1.0) // #e8e6e1 (text)
+        Self::new(0.949, 0.957, 0.973, 1.0) // #f2f4f8 (text)
     }
 
     pub fn mauve() -> Self {
@@ -67,15 +68,15 @@ impl Color {
     }
 
     pub fn peach() -> Self {
-        Self::new(1.0, 0.416, 0.239, 1.0) // #ff6a3d (Ember)
+        Self::new(1.0, 0.573, 0.329, 1.0) // #ff9254 (Beacon Orange)
     }
 
     pub fn teal() -> Self {
-        Self::new(0.361, 0.722, 1.0, 1.0) // #5cb8ff
+        Self::new(0.455, 0.722, 0.910, 1.0) // #74b8e8
     }
 
     pub fn sky() -> Self {
-        Self::new(0.361, 0.722, 1.0, 1.0) // #5cb8ff
+        Self::new(0.455, 0.722, 0.910, 1.0) // #74b8e8
     }
 
     pub fn lavender() -> Self {
@@ -86,16 +87,16 @@ impl Color {
         static PRESETS: &[Color] = &[
             Color {
                 r: 1.0,
-                g: 0.431,
-                b: 0.478,
+                g: 0.361,
+                b: 0.424,
                 a: 1.0,
-            }, // red #ff6e7a
+            }, // red #ff5c6c
             Color {
-                r: 0.361,
+                r: 0.455,
                 g: 0.722,
-                b: 1.0,
+                b: 0.910,
                 a: 1.0,
-            }, // blue #5cb8ff
+            }, // blue #74b8e8
             Color {
                 r: 0.239,
                 g: 0.863,

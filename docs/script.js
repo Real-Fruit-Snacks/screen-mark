@@ -434,22 +434,73 @@ ${stamp()}`),
     }
   });
 
+  // --- Theme toggle (LX 263 Dark default / LX 512 Light opt-in) with radial View Transition ---
+  const themeBtn = document.getElementById('theme-toggle');
+  const scrollRegion = document.getElementById('page-scroll');
+  const rfsToast = document.getElementById('rfs-toast');
+  let rfsToastTimer = 0;
+
+  function showRfsToast(msg, kind = 'is-ok') {
+    if (!rfsToast) return;
+    rfsToast.className = 'rfs-toast ' + kind;
+    rfsToast.textContent = msg;
+    try { rfsToast.showPopover(); } catch (_) {}
+    clearTimeout(rfsToastTimer);
+    rfsToastTimer = setTimeout(() => { try { rfsToast.hidePopover(); } catch (_) {} }, 2600);
+  }
+
+  function applyTheme(next) {
+    const isLight = next === 'light';
+    if (isLight) document.documentElement.setAttribute('data-theme', 'light');
+    else document.documentElement.removeAttribute('data-theme');
+    const cs = document.querySelector('meta[name="color-scheme"]');
+    const tc = document.querySelector('meta[name="theme-color"]');
+    if (cs) cs.content = isLight ? 'light' : 'dark';
+    if (tc) tc.content = isLight ? '#F5F7F9' : '#050507';
+    if (themeBtn) {
+      themeBtn.setAttribute('aria-pressed', String(isLight));
+      themeBtn.setAttribute('aria-label', isLight ? 'Switch to Dark mode' : 'Switch to Light mode');
+      const lbl = themeBtn.querySelector('.theme-label');
+      if (lbl) lbl.textContent = isLight ? 'LX 512 LIGHT' : 'LX 263 DARK';
+    }
+  }
+  applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark');
+  if (themeBtn) {
+    themeBtn.addEventListener('click', (e) => {
+      const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+      try { localStorage.setItem('rfs-theme', next); } catch (_) {}
+      const r = themeBtn.getBoundingClientRect();
+      const x = e.clientX || (r.left + r.width / 2);
+      const y = e.clientY || (r.top + r.height / 2);
+      const maxR = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+      document.documentElement.style.setProperty('--vt-x', x + 'px');
+      document.documentElement.style.setProperty('--vt-y', y + 'px');
+      document.documentElement.style.setProperty('--vt-r', maxR + 'px');
+      if (document.startViewTransition && !still) document.startViewTransition(() => applyTheme(next));
+      else applyTheme(next);
+    });
+  }
+  addEventListener('storage', (e) => {
+    if (e.key === 'rfs-theme') applyTheme(e.newValue === 'light' ? 'light' : 'dark');
+  });
+
   // --- The highlighter mark in the quote draws in once, when it's on screen ---
   const mark = document.querySelector('.why mark');
   if (mark && 'IntersectionObserver' in window) {
-    const io = new IntersectionObserver(([en]) => { if (en.isIntersecting) { mark.classList.add('is-drawn'); io.disconnect(); } }, { rootMargin: '0px 0px -30% 0px' });
+    const io = new IntersectionObserver(([en]) => { if (en.isIntersecting) { mark.classList.add('is-drawn'); io.disconnect(); } }, { root: scrollRegion || null, rootMargin: '0px 0px -30% 0px' });
     io.observe(mark);
   } else if (mark) mark.classList.add('is-drawn');
 
   // --- Copy button in Install ---
   document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
     const done = (ok) => {
-      b.textContent = ok ? 'Copied' : 'Press Ctrl+C';
+      b.textContent = ok ? '[ok] Copied' : 'Press Ctrl+C';
       announce(ok ? 'Copied the cargo command' : 'Couldn’t copy. The command is selected; press Ctrl+C.');
+      if (ok) showRfsToast('[ok] Command copied to clipboard.', 'is-ok');
       setTimeout(() => (b.textContent = 'Copy'), 2500);
     };
-    // Without clipboard access, select the command so it can be copied by hand
-    const selectIt = () => { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); getSelection().removeAllRanges(); getSelection().addRange(r); done(false); };
+    const codeEl = b.closest('.rfs-code-card')?.querySelector('pre code') || b.previousElementSibling;
+    const selectIt = () => { const r = document.createRange(); r.selectNodeContents(codeEl); getSelection().removeAllRanges(); getSelection().addRange(r); done(false); };
     if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy).then(() => done(true), selectIt);
     else selectIt();
   }));

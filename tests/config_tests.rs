@@ -90,11 +90,11 @@ fn empty_config_parses_as_defaults() {
 #[test]
 fn parse_color_hex() {
     let mut cfg = Config::default();
-    cfg.general.default_color = "#5cb8ff".to_string();
+    cfg.general.default_color = "#74b8e8".to_string();
     let c = cfg.default_color();
-    assert!((c.r - 0x5c as f32 / 255.0).abs() < 0.001);
+    assert!((c.r - 0x74 as f32 / 255.0).abs() < 0.001);
     assert!((c.g - 0xb8 as f32 / 255.0).abs() < 0.001);
-    assert!((c.b - 0xff as f32 / 255.0).abs() < 0.001);
+    assert!((c.b - 0xe8 as f32 / 255.0).abs() < 0.001);
 
     // Malformed hex falls back to red
     cfg.general.default_color = "#zzzzzz".to_string();

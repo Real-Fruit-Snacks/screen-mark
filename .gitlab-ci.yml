@@ -1,7 +1,7 @@
 # GitLab Pages deployment for the screen-mark website.
 # Publishes the static docs/ site on every push to the default branch.
 # No build step and no internet needed — the site (HTML, CSS, JS, vendored
-# Bricolage Grotesque and Azeret Mono fonts, and images) is served exactly as it
+# Big Shoulders Stencil, Albert Sans, and Azeret Mono fonts, and images) is served exactly as it
 # sits in the repo, so it works fully offline / air-gapped.
 
 pages:

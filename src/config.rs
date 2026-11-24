@@ -612,7 +612,7 @@ impl Config {
     }
 
     /// Parse the `default_color` string into a `Color`. Accepts the named
-    /// Preset names (red, blue, green, yellow, mauve, ...) or a hex value like `#ff6a3d`. Falls back to red.
+    /// Preset names (red, blue, green, yellow, mauve, ...) or a hex value like `#ff9254`. Falls back to red.
     pub fn default_color(&self) -> Color {
         match self.general.default_color.as_str() {
             "red" => Color::red(),

@@ -439,7 +439,7 @@ fn with_a_region_the_toolbar_and_the_state_are_described() {
     assert!(snap
         .controls
         .iter()
-        .any(|c| c.label == "Colour Red #ff6e7a"));
+        .any(|c| c.label == "Colour Red #ff5c6c"));
     let style = snap
         .controls
         .iter()

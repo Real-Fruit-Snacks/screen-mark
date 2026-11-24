@@ -1,139 +1,160 @@
-/* screen-mark website. Direction and rules: DESIGN.md.
-   Colors are the RFS tokens (rfs-brand/brand/tokens/rfs.css, v1.2.0), pasted verbatim; nothing else
-   from RFS is used here. */
+/* screen-mark website — Cyclorama Dawn v2.1.0 (LX 263 Dark default / LX 512 Light opt-in).
+   Canonical palette, shell scrollbar, and components come from rfs.css + rfs-components.css. */
 
 @font-face {
-  font-family: "Bricolage Grotesque";
-  src: url("assets/fonts/bricolage-grotesque-latin.woff2") format("woff2");
-  font-weight: 400 800;
+  font-family: "Big Shoulders Stencil";
+  src: url("assets/fonts/big-shoulders-stencil-latin.woff2") format("woff2");
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Big Shoulders Stencil";
+  src: url("assets/fonts/big-shoulders-stencil-latin-ext.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Albert Sans";
+  src: url("assets/fonts/albert-sans-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Albert Sans";
+  src: url("assets/fonts/albert-sans-latin-ext.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 @font-face {
   font-family: "Azeret Mono";
   src: url("assets/fonts/azeret-mono-latin.woff2") format("woff2");
-  font-weight: 400 600;
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Azeret Mono";
+  src: url("assets/fonts/azeret-mono-latin-ext.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* ---------- RFS colors: Nightshift (dark) ---------- */
+/* ---------- Screen-Mark Overlay & Layout Tokens ---------- */
 :root {
-  --rfs-bg:#0C0D10;
-  --rfs-surface:#13151A;
-  --rfs-raised:#1A1D24;
-  --rfs-line:#262A33;
-  --rfs-line-strong:#636872;
-  --rfs-text:#E8E6E1;
-  --rfs-mute:#8A8F99;
-  --rfs-primary:#FF6A3D;
-  --rfs-primary-hover:#FC7951;
-  --rfs-primary-press:#F98864;
-  --rfs-on-primary:#0C0D10;
-  --rfs-accent:#FFC247;
-  --rfs-signal:#3DDC97;
-  --rfs-fault:#F06292;
-  --rfs-code-bg:#070809;
+  --sm-accent: var(--rfs-beacon-ink);
+  --dim: rgb(0 0 0 / 0.42);
+  --sel-line: color-mix(in oklab, var(--sm-accent) 92%, transparent);
+  --cross-line: color-mix(in oklab, var(--sm-accent) 55%, transparent);
 
-  --marker-ink: #0C0D10;   /* number on a step marker */
-  --hl: color-mix(in srgb, var(--rfs-accent) 70%, transparent);
-  --stage-bg: var(--rfs-surface);   /* Nightshift: a backdrop the dim visibly darkens */
-  --hl-ink: #0C0D10;
-  --swatch-edge: rgb(255 255 255 / 0.3);
-  /* Annotations: the app’s yellow preset in both schemes; Dayshift gives them a thin dark edge */
+  --stage-bg:
+    radial-gradient(ellipse 68% 60% at 10% 10%, color-mix(in oklab, var(--rfs-steel) 26%, transparent), transparent 72%),
+    radial-gradient(ellipse 62% 56% at 92% 16%, color-mix(in oklab, var(--rfs-beacon) 18%, transparent), transparent 72%),
+    var(--rfs-surface);
+
+  --marker-ink: #050507;
+  --hl: color-mix(in oklab, var(--rfs-accent) 72%, transparent);
+  --hl-ink: #050507;
+  --swatch-edge: rgb(255 255 255 / 0.32);
   --draw: #FFC247;
   --draw-edge: none;
-}
-/* ---------- RFS colors: Dayshift (light) ---------- */
-@media (prefers-color-scheme: light) {
-  :root {
-    --rfs-bg:#F6F5F2;
-    --rfs-surface:#FFFFFF;
-    --rfs-raised:#ECEAE4;
-    --rfs-line:#D6D3CB;
-    --rfs-line-strong:#89867F;
-    --rfs-text:#1A1B1E;
-    --rfs-mute:#666A73;
-    --rfs-primary:#C03B0A;
-    --rfs-primary-hover:#AC370C;
-    --rfs-primary-press:#98330F;
-    --rfs-on-primary:#FFFFFF;
-    --rfs-accent:#925F00;
-    --rfs-signal:#15794D;
-    --rfs-fault:#B0306A;
-    --rfs-code-bg:#FFFFFF;
 
-    --marker-ink: #FFFFFF;
-    --hl: color-mix(in srgb, #FFC247 55%, transparent);
-    --hl-ink: var(--rfs-text);
-    --stage-bg: var(--rfs-bg);
-    --swatch-edge: rgb(0 0 0 / 0.35);
-    --draw-edge: drop-shadow(0 0 0.6px rgb(26 27 30 / 0.9)) drop-shadow(0 0 0.6px rgb(26 27 30 / 0.9));
-  }
-}
+  --display: var(--rfs-font-display);
+  --font: var(--rfs-font-sans);
+  --mono: var(--rfs-font-mono);
 
-:root {
-  color-scheme: dark light;
+  --step-5: clamp(2.5rem, 1.85rem + 2.8vw, 4.4rem);
+  --step-4: clamp(2.05rem, 1.58rem + 2.1vw, 3.4rem);
+  --step-3: clamp(1.75rem, 1.42rem + 1.35vw, 2.55rem);
+  --step-2: clamp(1.38rem, 1.2rem + 0.78vw, 1.85rem);
+  --step-1: clamp(1.15rem, 1.06rem + 0.4vw, 1.4rem);
+  --step-0: clamp(0.98rem, 0.94rem + 0.16vw, 1.08rem);
+  --step--1: clamp(0.82rem, 0.81rem + 0.02vw, 0.84rem);
 
-  /* The app's overlay, verbatim: 40% black, Ember at 90% for the selection and 50% for the crosshair */
-  --dim: rgb(0 0 0 / 0.4);
-  --sel-line: color-mix(in srgb, var(--rfs-primary) 90%, transparent);
-  --cross-line: color-mix(in srgb, var(--rfs-primary) 50%, transparent);
+  --space-3xs: clamp(0.25rem, 0.24rem + 0.04vw, 0.28rem);
+  --space-2xs: clamp(0.5rem, 0.48rem + 0.09vw, 0.56rem);
+  --space-xs: clamp(0.75rem, 0.72rem + 0.13vw, 0.84rem);
+  --space-s: clamp(1rem, 0.96rem + 0.18vw, 1.125rem);
+  --space-m: clamp(1.5rem, 1.44rem + 0.27vw, 1.68rem);
+  --space-l: clamp(2rem, 1.92rem + 0.36vw, 2.25rem);
+  --space-xl: clamp(3rem, 2.88rem + 0.54vw, 3.375rem);
+  --space-2xl: clamp(4rem, 3.84rem + 0.72vw, 4.5rem);
+  --space-l-2xl: clamp(1.85rem, 1.1rem + 3.1vw, 3.85rem);
+  --space-xl-3xl: clamp(2.75rem, 1.7rem + 4.8vw, 5.75rem);
 
-  --font: "Bricolage Grotesque", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
-  --mono: "Azeret Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-
-  /* Type: 16px @360px -> 18px @1440px, ratio 1.2 -> 1.333 (scripts/scale.mjs) */
-  --step-5: clamp(2.4883rem, 1.7395rem + 3.3281vw, 4.7348rem);
-  --step-4: clamp(2.0736rem, 1.5808rem + 2.1902vw, 3.552rem);
-  --step-3: clamp(1.728rem, 1.4158rem + 1.3877vw, 2.6647rem);
-  --step-2: clamp(1.44rem, 1.2537rem + 0.8281vw, 1.999rem);
-  --step-1: clamp(1.2rem, 1.1001rem + 0.4439vw, 1.4996rem);
-  --step-0: clamp(1rem, 0.9583rem + 0.1852vw, 1.125rem);
-  --step--1: clamp(0.8333rem, 0.8298rem + 0.0157vw, 0.844rem);
-
-  --space-3xs: clamp(0.25rem, 0.2396rem + 0.0463vw, 0.2813rem);
-  --space-2xs: clamp(0.5rem, 0.4792rem + 0.0926vw, 0.5625rem);
-  --space-xs: clamp(0.75rem, 0.7188rem + 0.1389vw, 0.8438rem);
-  --space-s: clamp(1rem, 0.9583rem + 0.1852vw, 1.125rem);
-  --space-m: clamp(1.5rem, 1.4375rem + 0.2778vw, 1.6875rem);
-  --space-l: clamp(2rem, 1.9167rem + 0.3704vw, 2.25rem);
-  --space-xl: clamp(3rem, 2.875rem + 0.5556vw, 3.375rem);
-  --space-2xl: clamp(4rem, 3.8333rem + 0.7407vw, 4.5rem);
-  --space-l-2xl: clamp(2rem, 1.1667rem + 3.7037vw, 4.5rem);
-  --space-xl-3xl: clamp(3rem, 1.75rem + 5.5556vw, 6.75rem);
-
-  --wrap: 80rem;
+  --wrap: 78rem;
   --gutter: clamp(1rem, 0.5rem + 2.5vw, 3rem);
   --cap-pad: clamp(0.75rem, 0.4rem + 1.5vw, 1.5rem);
-  /* The download block reaches into the gutter by this much, keeping its selection 12px off the screen edge */
   --cap-pull: min(var(--cap-pad), var(--gutter) - 0.75rem);
-  --bar-h: 4rem;
+  --bar-h: 61px;
 
   --ease: cubic-bezier(.2, .7, .2, 1);
   --fast: 150ms;
 }
-/* Paper under 40% black reads as a disabled page; Dayshift dims a little less */
-@media (prefers-color-scheme: light) { :root { --dim: rgb(26 27 30 / 0.3); } }
+
+:root[data-theme="light"] {
+  --dim: rgb(17 20 27 / 0.28);
+  --stage-bg:
+    radial-gradient(ellipse 68% 60% at 10% 10%, color-mix(in oklab, var(--rfs-steel) 12%, transparent), transparent 72%),
+    radial-gradient(ellipse 62% 56% at 92% 16%, color-mix(in oklab, var(--rfs-beacon) 10%, transparent), transparent 72%),
+    var(--rfs-bg);
+  --marker-ink: #050507;
+  --hl: color-mix(in oklab, #FFC247 55%, transparent);
+  --hl-ink: var(--rfs-text);
+  --swatch-edge: rgb(0 0 0 / 0.35);
+  --draw-edge: drop-shadow(0 0 0.6px rgb(17 20 27 / 0.9)) drop-shadow(0 0 0.6px rgb(17 20 27 / 0.9));
+}
 
 /* ---------- Base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: var(--space-s); }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   margin: 0;
   background: var(--rfs-bg);
   color: var(--rfs-text);
   font: 400 var(--step-0)/1.6 var(--font);
-  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
 }
-h1, h2, h3 { margin: 0; font-weight: 800; line-height: 1.02; letter-spacing: -0.025em; text-wrap: balance; }
+#page-scroll { scroll-padding-top: var(--space-s); }
+
+h1, h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 800;
+  line-height: 0.94;
+  letter-spacing: 0.03em;
+  text-wrap: balance;
+}
+h3 {
+  margin: 0;
+  font-family: var(--font);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
 p, li, dd, figcaption { text-wrap: pretty; }
 p { margin: 0; }
-a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.2em; text-decoration-color: var(--rfs-line-strong); }
+a {
+  color: var(--rfs-steel-ink);
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: color-mix(in oklab, var(--rfs-steel-ink) 45%, transparent);
+}
 code, kbd, pre { font-family: var(--mono); }
 button { touch-action: manipulation; }
-code { font-size: 0.86em; overflow-wrap: anywhere; }
+code { font-size: 0.86em; overflow-wrap: anywhere; color: var(--rfs-text); }
 kbd {
   display: inline-block;
   font-size: 0.8em;
@@ -147,67 +168,102 @@ kbd {
   color: var(--rfs-text);
   white-space: nowrap;
 }
-::selection { background: color-mix(in srgb, var(--rfs-primary) 32%, transparent); color: var(--rfs-text); }
-:focus-visible { outline: 2px solid var(--rfs-primary); outline-offset: 3px; border-radius: 2px; }
+::selection { background: color-mix(in oklab, var(--sm-accent) 32%, transparent); color: var(--rfs-text); }
+:focus-visible { outline: 2px solid var(--rfs-focus); outline-offset: 3px; border-radius: 2px; }
 @media (hover: hover) {
-  a { transition: text-decoration-color var(--fast) var(--ease); }
-  a:hover { text-decoration-color: var(--rfs-primary); }
+  a { transition: color var(--fast) var(--ease), text-decoration-color var(--fast) var(--ease); }
+  a:hover { color: var(--rfs-beacon-ink); text-decoration-color: var(--rfs-beacon-ink); }
 }
 
 .wrap { width: 100%; max-width: calc(var(--wrap) + 2 * var(--gutter)); margin-inline: auto; padding-inline: var(--gutter); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sprite { position: absolute; }
-.skip { position: absolute; left: var(--gutter); top: -4rem; z-index: 10; padding: 0.5em 1em; background: var(--rfs-surface); border: 1px solid var(--rfs-line-strong); }
-.skip:focus { top: 0.5rem; }
+.rfs-skip {
+  position: fixed; left: 1rem; top: -4rem; z-index: 120;
+  padding: 0.55rem 0.95rem; background: var(--rfs-surface); color: var(--rfs-text);
+  border: 1px solid var(--rfs-beacon-ink); border-radius: 4px; text-decoration: none;
+  font: 500 0.85rem/1 var(--mono);
+}
+.rfs-skip:focus { top: 0.75rem; }
 
-/* ---------- Header (sits on the stage, under its overlay) ---------- */
-.bar { position: absolute; inset: 0 0 auto; height: var(--bar-h); }
+/* ---------- Pinned Header (always above scroll region & overlay) ---------- */
+.bar {
+  height: var(--bar-h);
+  background: var(--rfs-bg);
+  border-bottom: 1px solid var(--rfs-line);
+}
 .bar__in { height: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--space-s); }
-.brand { display: inline-flex; align-items: center; gap: 0.6rem; font-weight: 700; letter-spacing: -0.01em; text-decoration: none; min-height: 44px; }
-.brand img { display: block; }
-.bar nav { display: flex; flex-wrap: wrap; justify-content: flex-end; column-gap: clamp(0.9rem, 0.4rem + 1.6vw, 2rem); row-gap: 0; font-weight: 500; }
-/* Above the stage box (which would swallow clicks), under the dim (which takes none) */
-.bar a { position: relative; z-index: 2; }
-.bar nav a { text-decoration: none; padding-block: 0.6rem; white-space: nowrap; }
-@media (hover: hover) { .bar nav a:hover { text-decoration: underline; text-decoration-color: var(--rfs-primary); } }
-@media (max-width: 34rem) { .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } .bar nav { font-size: 0.95rem; } }
+.brand {
+  display: inline-flex; align-items: center; gap: 0.6rem;
+  font-family: var(--display); font-weight: 800; font-size: 1.45rem; letter-spacing: 0.06em; line-height: 1;
+  color: var(--rfs-text); text-decoration: none; min-height: 44px; white-space: nowrap; flex: none;
+}
+.brand:hover { color: var(--rfs-text); }
+.brand img { display: block; border-radius: 4px; }
+
+.bar__nav {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: clamp(0.75rem, 0.35rem + 1.2vw, 1.65rem); font-size: 0.92rem; font-weight: 500;
+}
+.bar__nav a { color: var(--rfs-mute); text-decoration: none; padding-block: 0.5rem; white-space: nowrap; }
+@media (hover: hover) { .bar__nav a:hover { color: var(--rfs-text); } }
+
+.theme-btn {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font: 600 0.75rem/1 var(--mono); letter-spacing: 0.06em;
+  color: var(--rfs-text); background: var(--rfs-surface);
+  border: 1px solid var(--rfs-line-strong); border-radius: 4px;
+  padding: 0.48rem 0.72rem; min-height: 2.25rem;
+  cursor: pointer; white-space: nowrap; flex: none;
+  transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease);
+}
+@media (hover: hover) { .theme-btn:hover { border-color: var(--rfs-beacon-ink); background: var(--rfs-raised); } }
+.theme-swatch {
+  width: 8px; height: 8px; border-radius: 2px;
+  background: var(--rfs-beacon-ink);
+}
+:root[data-theme="light"] .theme-swatch { background: var(--rfs-steel-ink); }
+
 .nav-short { display: none; }
-@media (max-width: 23rem) {
-  .nav-long { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  .nav-short { display: inline; }
+@media (max-width: 48rem) {
+  .bar__nav .nav-link { display: none; }
 }
 
-/* ---------- Stage: the first screen, under the capture overlay ---------- */
-.stage { position: relative; min-height: 100vh; min-height: 100svh; overflow: hidden; overflow: clip; display: flex; padding-top: var(--bar-h); }
-.stage { background: var(--stage-bg); border-bottom: 1px solid var(--rfs-line); }
-.stage__in { container-type: inline-size; display: flex; flex-direction: column; justify-content: flex-start; padding-block: clamp(1.5rem, 9vh, 7rem) var(--space-xl); }
-/* script.js places the toolbar under the selection, out of the flow; keep room for it */
-.js .stage__in { padding-bottom: calc(var(--space-xl) + 48px); }
+/* ---------- Stage: first screen under the live capture overlay ---------- */
+.stage {
+  position: relative;
+  min-height: calc(100vh - var(--bar-h));
+  min-height: calc(100svh - var(--bar-h));
+  overflow: hidden; overflow: clip;
+  display: flex;
+  background: var(--stage-bg);
+  border-bottom: 1px solid var(--rfs-line);
+}
+.stage__in {
+  container-type: inline-size;
+  display: flex; flex-direction: column; justify-content: flex-start;
+  padding-block: clamp(1.5rem, 6vh, 4.75rem) var(--space-xl);
+}
+.js .stage__in { padding-bottom: calc(var(--space-xl) + 52px); }
 @media (max-width: 40rem) { .stage__in { padding-top: var(--space-l); } }
-/* Portrait phones and tablets: no empty dimmed slab under the content */
 @media (orientation: portrait) and (max-width: 64rem) { .stage { min-height: 0; } }
 
-/* The name fills its column, but never so tall that the download and the toolbar drop below the fold.
-   No nowrap: at 17.5cqi it fits on one line even in the fallback font, and wider letter spacing breaks it at the hyphen instead of clipping it. */
 .wordmark {
-  font-size: min(17vw, 15rem);
-  font-size: max(2.5rem, min(17.5cqi, 24vh));
-  font-size: max(2.5rem, min(17.5cqi, 24svh));
+  font-family: var(--display);
+  font-size: clamp(3.5rem, 11.5cqi, 10.5rem);
   font-weight: 800;
-  line-height: 0.8;
-  letter-spacing: -0.04em;
-  margin: 0 0 var(--space-l-2xl) -0.035em;
-  padding-bottom: 0.06em;
+  line-height: 0.86;
+  letter-spacing: 0.03em;
+  margin: 0 0 var(--space-l-2xl) 0;
+  color: var(--rfs-text);
 }
-/* Short landscape screens: less air above and below the name; 64px under it fits the toolbar above the selection with 16px to spare */
 @media (max-height: 50rem) and (orientation: landscape) {
-  .stage__in { padding-top: clamp(1rem, 5svh, 3rem); }
-  .wordmark { margin-bottom: 4rem; }
+  .stage__in { padding-top: clamp(1rem, 4svh, 2.5rem); }
+  .wordmark { margin-bottom: 3rem; }
 }
-/* Landscape phones: touch never flips the toolbar, so the name can sit tight and small */
 @media (max-height: 30rem) and (orientation: landscape) and (pointer: coarse) {
   .stage__in { padding-top: var(--space-2xs); }
-  .wordmark { font-size: min(17.5cqi, 18svh); margin-bottom: var(--space-s); }
+  .wordmark { font-size: min(14cqi, 18svh); margin-bottom: var(--space-s); }
   .stage .lede { font-size: var(--step-1); max-width: none; }
   .stage .how { margin-top: var(--space-2xs); }
   .stage .capture { display: flex; flex-direction: column; }
@@ -215,18 +271,19 @@ kbd {
 }
 
 .capture { position: relative; align-self: flex-start; max-width: 40rem; padding: var(--cap-pad); margin-left: calc(-1 * var(--cap-pull)); }
-.lede { font-size: var(--step-2); font-weight: 650; line-height: 1.14; letter-spacing: -0.018em; text-wrap: balance; max-width: 21em; }
+.lede { font-size: var(--step-2); font-weight: 600; line-height: 1.18; letter-spacing: -0.015em; text-wrap: balance; max-width: 24em; }
 .how { margin-top: var(--space-s); color: var(--rfs-mute); max-width: 36em; }
 .how kbd { color: var(--rfs-text); }
 .get { position: relative; width: fit-content; margin-top: var(--space-m); }
 .btn {
-  display: inline-flex; align-items: center; min-height: 48px; padding: 0.7em 1.35em;
-  background: var(--rfs-primary); color: var(--rfs-on-primary);
-  font-weight: 700; letter-spacing: -0.005em; text-decoration: none; border-radius: 6px;
-  transition: background-color var(--fast) var(--ease), transform var(--fast) var(--ease);
+  display: inline-flex; align-items: center; min-height: 48px; padding: 0.72em 1.4em;
+  background: var(--rfs-horizon-gradient); color: #FFFFFF;
+  font-weight: 700; letter-spacing: 0.01em; text-decoration: none; border-radius: 6px;
+  border: 1px solid color-mix(in oklab, var(--rfs-beacon-ink) 35%, transparent);
+  transition: filter var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
-@media (hover: hover) { .btn:hover { background: var(--rfs-primary-hover); transform: translateY(-1px); } }
-.btn:active { background: var(--rfs-primary-press); transform: none; }
+@media (hover: hover) { .btn:hover { color: #FFFFFF; filter: brightness(1.08); transform: translateY(-1px); } }
+.btn:active { filter: brightness(0.95); transform: none; }
 .meta { margin-top: var(--space-s); font-size: var(--step--1); line-height: 1.75; color: var(--rfs-mute); }
 .meta a { padding-block: 0.3em; }
 .meta > span { display: block; }
@@ -234,14 +291,13 @@ kbd {
 .phone-note { display: none; margin-top: var(--space-s); color: var(--rfs-text); text-wrap: balance; }
 @media (pointer: coarse) and (max-width: 48rem) { .phone-note { display: block; } }
 
-/* Annotations that are part of the first frame (an arrow and step marker 1) */
-.note-arrow { position: absolute; left: calc(100% + 2px); top: calc(50% - 56px); width: 132px; height: 64px; overflow: visible; }
-.note-arrow { filter: var(--draw-edge); }
+/* Annotations in the first frame (arrow + step marker 1) */
+.note-arrow { position: absolute; left: calc(100% + 2px); top: calc(50% - 56px); width: 132px; height: 64px; overflow: visible; filter: var(--draw-edge); }
 .note-arrow__shaft { fill: none; stroke: var(--draw); stroke-width: 3; stroke-linecap: butt; }
 .note-arrow__head { fill: var(--draw); }
 .marker {
   display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
-  background: var(--draw); color: #0C0D10; border: 2px solid #fff;
+  background: var(--draw); color: var(--marker-ink); border: 2px solid #FFFFFF;
   font: 600 15px/1 var(--mono); filter: var(--draw-edge);
 }
 .marker--static { position: absolute; left: max(-15px, 0.375rem - var(--cap-pad)); top: -15px; }
@@ -252,8 +308,8 @@ kbd {
 .toolbar {
   display: flex; align-items: center; gap: 8px; width: max-content; height: 40px; padding: 0 8px;
   margin: 8px 0 0 calc(-1 * var(--cap-pull));
-  background: color-mix(in srgb, var(--rfs-surface) 95%, transparent);
-  border: 1px solid color-mix(in srgb, var(--rfs-text) 12%, transparent);
+  background: color-mix(in oklab, var(--rfs-surface) 95%, transparent);
+  border: 1px solid var(--rfs-line-strong);
   border-radius: 8px;
   box-shadow: 1px 2px 0 rgb(0 0 0 / 0.4);
   position: relative; z-index: 2;
@@ -266,18 +322,17 @@ kbd {
 .toolbar svg, .key svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .toolbar [aria-pressed="true"] {
   color: var(--rfs-text);
-  background: color-mix(in srgb, var(--rfs-text) 8%, transparent);
-  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--rfs-primary) 70%, transparent);
+  background: color-mix(in oklab, var(--rfs-text) 8%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--sm-accent) 75%, transparent);
 }
 .toolbar .swatch::before { content: ""; width: 18px; height: 18px; border-radius: 4px; background: var(--c); box-shadow: inset 0 0 0 1px var(--swatch-edge); }
 .toolbar .sep::after, .toolbar .sep-md::after {
   content: ""; position: absolute; right: -4.5px; top: 4px; bottom: 4px; width: 1px;
-  background: color-mix(in srgb, var(--rfs-text) 15%, transparent);
+  background: color-mix(in oklab, var(--rfs-text) 16%, transparent);
 }
 .toolbar .sep-md::after { display: none; }
 .toolbar button:focus-visible { outline-offset: 1px; z-index: 1; }
-@media (hover: hover) { .toolbar button:hover { color: var(--rfs-text); background: color-mix(in srgb, var(--rfs-text) 6%, transparent); } }
-/* Fewer tools on narrow screens, the way the app's [toolbar] config hides them */
+@media (hover: hover) { .toolbar button:hover { color: var(--rfs-text); background: color-mix(in oklab, var(--rfs-text) 6%, transparent); } }
 @media (max-width: 64.99rem) { .toolbar .x-md { display: none; } .toolbar .sep-md::after { display: block; } }
 @media (max-width: 41.99rem) {
   .toolbar .x-sm { display: none; }
@@ -290,13 +345,13 @@ kbd {
   .toolbar [aria-pressed="true"], .key.is-current { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 
-/* No JavaScript: the selection is drawn around the download block by CSS alone */
+/* No JavaScript: selection drawn by CSS alone */
 html:not(.js) .capture {
   z-index: 1;
   box-shadow: 0 0 0 1.5px var(--sel-line), 0 0 0 200vmax var(--dim);
 }
 
-/* With JavaScript: script.js places these over the stage */
+/* With JavaScript: overlay primitives */
 .sel, .cross, .ink, .pill { position: absolute; left: 0; top: 0; pointer-events: none; display: none; }
 .sel { z-index: 3; box-shadow: 0 0 0 1.5px var(--sel-line), 0 0 0 200vmax var(--dim); }
 .cross { z-index: 3; inset: 0; }
@@ -306,8 +361,9 @@ html:not(.js) .capture {
 .ink { z-index: 3; width: 100%; height: 100%; overflow: visible; filter: var(--draw-edge); }
 .pill {
   z-index: 4; padding: 4px 8px; border-radius: 4px; white-space: nowrap;
-  background: color-mix(in srgb, var(--rfs-surface) 85%, transparent); color: var(--rfs-text);
-  font: 500 14px/1.15 var(--mono); font-variant-numeric: tabular-nums;
+  background: color-mix(in oklab, var(--rfs-surface) 90%, transparent); color: var(--rfs-text);
+  border: 1px solid var(--rfs-line);
+  font: 500 13px/1.15 var(--mono); font-variant-numeric: tabular-nums;
 }
 .js .stage.is-on .sel, .js .stage.is-on .pill { display: block; }
 .js .stage.is-crosshair .cross { display: block; }
@@ -320,13 +376,10 @@ html:not(.js) .capture {
 .js .stage.is-ready:not(.is-clean) .note-arrow, .js .stage.is-ready:not(.is-clean) .marker--static { visibility: visible; }
 .js .stage.is-live { cursor: crosshair; -webkit-user-select: none; user-select: none; }
 .js .stage.is-live a, .js .stage.is-live button { cursor: pointer; }
-/* Keep keyboard focus visible above the dim, on a halo of page colour so the ring reads against the dim */
-.js .stage a:focus-visible, .js .stage button:focus-visible, .bar a:focus-visible { position: relative; z-index: 6; }
-.js .stage .capture a:focus-visible, .bar a:focus-visible { box-shadow: 0 0 0 7px var(--rfs-bg); }
+.js .stage a:focus-visible, .js .stage button:focus-visible { position: relative; z-index: 6; }
+.js .stage .capture a:focus-visible { box-shadow: 0 0 0 7px var(--rfs-bg); }
 .js .stage:focus { outline: none; }
-/* Only when Esc has just moved keyboard focus here, so tool keys don’t frame the whole screen */
-.js .stage.kbd-focus:focus { outline: 2px solid var(--rfs-primary); outline-offset: -4px; }
-/* The one action is never dimmed; the rest of the download block turns to full text colour when it is */
+.js .stage.kbd-focus:focus { outline: 2px solid var(--rfs-focus); outline-offset: -4px; }
 .js .stage .btn { position: relative; z-index: 4; }
 .js .stage .marker--static, .js .stage .note-arrow { z-index: 5; }
 .js .stage.lit-name .wordmark, html:not(.js) .wordmark { position: relative; z-index: 4; }
@@ -334,34 +387,41 @@ html:not(.js) .capture {
 html:not(.js) .js-only { display: none; }
 html:not(.js) .copy { display: none; }
 
-/* The app's corner popup: 380 × 84, hairline border, 3px status bar on the left. It never takes clicks;
-   script.js moves it to the top when the bottom would cover the toolbar or the download block. */
+/* The app's corner popup inside the overlay stage */
 .toast {
   position: absolute; right: 16px; bottom: 16px; z-index: 5; display: none; pointer-events: none;
   width: min(380px, calc(100% - 32px)); min-height: 84px; padding: 14px 16px 14px 19px;
-  background: var(--rfs-surface); border: 1px solid var(--rfs-line);
-  box-shadow: inset 3px 0 0 var(--bar, var(--rfs-mute));
+  background: var(--rfs-surface); border: 1px solid var(--rfs-line-strong); border-radius: 4px;
+  box-shadow: inset 3px 0 0 var(--sm-accent);
 }
 .toast.is-shown { display: block; }
-.toast.is-top { top: calc(var(--bar-h) + 8px); bottom: auto; }
+.toast.is-top { top: 16px; bottom: auto; }
 .toast.is-fixed { position: fixed; bottom: auto; left: 16px; right: 16px; width: auto; max-width: 380px; margin-inline: auto; }
-.toast__title { font-size: 14px; font-weight: 650; line-height: 1.3; }
+.toast__title { font-size: 14px; font-weight: 650; line-height: 1.3; color: var(--rfs-text); }
 .toast__detail { margin-top: 4px; font-size: 13px; line-height: 1.4; color: var(--rfs-mute); white-space: pre-line; }
+
+/* Standalone popover copy toast */
+#rfs-toast {
+  position: fixed;
+  inset: auto 1.25rem 1.25rem auto;
+  margin: 0;
+}
+#rfs-toast:not(:popover-open) { display: none; }
 
 /* ---------- Sections ---------- */
 main > section:not(.stage) { padding-block: var(--space-xl-3xl); }
 main > section:not(.stage) + section { border-top: 1px solid var(--rfs-line); }
 h2 { font-size: var(--step-5); }
-h3 { font-size: var(--step-2); font-weight: 700; letter-spacing: -0.02em; }
+h3 { font-size: var(--step-2); }
 
-/* Two hotkeys */
+/* Three hotkeys */
 .hotkeys h2 { margin-bottom: var(--space-l-2xl); }
 .hk { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-m) var(--space-xl); padding-block: var(--space-xl); border-top: 1px solid var(--rfs-line); }
 @media (min-width: 56rem) { .hk { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
-.caps { display: flex; flex-wrap: wrap; gap: 0.18em; align-items: flex-start; font-size: clamp(2rem, 0.9rem + 3.6vw, 4.25rem); }
+.caps { display: flex; flex-wrap: wrap; gap: 0.18em; align-items: flex-start; font-size: clamp(1.9rem, 0.9rem + 3.2vw, 3.8rem); }
 .caps kbd {
   font-size: 1em; font-weight: 500; line-height: 1; letter-spacing: -0.02em;
-  padding: 0.24em 0.36em 0.28em; border-radius: 0.16em; border-bottom-width: 0.09em;
+  padding: 0.24em 0.36em 0.28em; border-radius: 6px; border-bottom-width: 0.09em;
 }
 .hk__body h3 { margin-bottom: var(--space-s); }
 .hk__body p + p { margin-top: var(--space-s); }
@@ -370,16 +430,17 @@ h3 { font-size: var(--step-2); font-weight: 700; letter-spacing: -0.02em; }
 .popup__card {
   display: flex; align-items: center; gap: 14px; width: min(380px, 100%); min-height: 84px;
   padding: 11px 14px 11px 17px; background: var(--rfs-surface); border: 1px solid var(--rfs-line);
-  box-shadow: inset 3px 0 0 var(--rfs-primary);
+  border-radius: 4px;
+  box-shadow: inset 3px 0 0 var(--sm-accent);
 }
-.popup__thumb { flex: none; display: block; width: 96px; height: 60px; border: 1px solid var(--rfs-line); }
+.popup__thumb { flex: none; display: block; width: 96px; height: 60px; border: 1px solid var(--rfs-line); border-radius: 2px; overflow: hidden; }
 .popup__thumb svg { display: block; width: 100%; height: 100%; }
 .t-bg { fill: var(--rfs-bg); }
 .t-word { fill: var(--rfs-text); }
 .t-dim { fill: rgb(0 0 0 / 0.4); }
-.t-sel { fill: var(--rfs-bg); stroke: var(--rfs-primary); stroke-width: 1; }
-.t-btn { fill: var(--rfs-primary); }
-.t-arrow { fill: none; stroke: var(--rfs-accent); stroke-width: 1.5; stroke-linecap: round; }
+.t-sel { fill: var(--rfs-bg); stroke: var(--sm-accent); stroke-width: 1; }
+.t-btn { fill: var(--sm-accent); }
+.t-arrow { fill: none; stroke: var(--draw); stroke-width: 1.5; stroke-linecap: round; }
 .popup__text { display: grid; gap: 4px; min-width: 0; }
 .popup__title { font-size: 14px; font-weight: 650; line-height: 1.3; }
 .popup__detail { font-size: 12.5px; line-height: 1.4; color: var(--rfs-mute); }
@@ -389,7 +450,7 @@ h3 { font-size: var(--step-2); font-weight: 700; letter-spacing: -0.02em; }
 .aside { padding-top: var(--space-l); border-top: 1px solid var(--rfs-line); color: var(--rfs-mute); }
 .aside p { max-width: 52em; }
 
-/* Fourteen tools: a QWERTY plate with only the tool keys lit */
+/* Fifteen tools: QWERTY plate */
 .tools__head { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-s) var(--space-xl); align-items: end; margin-bottom: var(--space-l-2xl); }
 @media (min-width: 56rem) { .tools__head { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); } }
 .tools__head p { color: var(--rfs-mute); max-width: 32em; }
@@ -399,7 +460,7 @@ h3 { font-size: var(--step-2); font-weight: 700; letter-spacing: -0.02em; }
 .kb__row:nth-child(3) { padding-left: calc(var(--u) * 0.75); }
 .key {
   position: relative; flex: none; width: calc(var(--u) - var(--gap)); aspect-ratio: 1 / 0.86;
-  border: 1px solid var(--rfs-line); border-radius: clamp(4px, 0.15rem + 0.5vw, 10px);
+  border: 1px solid var(--rfs-line); border-radius: clamp(4px, 0.15rem + 0.4vw, 8px);
   color: var(--rfs-line-strong); font: 500 clamp(0.75rem, 0.5rem + 1vw, 1.25rem)/1 var(--mono);
   padding: clamp(5px, 0.1rem + 0.8vw, 14px);
 }
@@ -414,9 +475,9 @@ h3 { font-size: var(--step-2); font-weight: 700; letter-spacing: -0.02em; }
 .key svg { position: absolute; top: clamp(5px, 0.1rem + 0.8vw, 14px); right: clamp(5px, 0.1rem + 0.8vw, 14px); color: var(--rfs-mute); width: clamp(14px, 0.5rem + 0.6vw, 20px); height: auto; aspect-ratio: 1; }
 .key__name { font: 500 var(--step--1)/1.15 var(--font); color: var(--rfs-mute); }
 button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
-@media (hover: hover) { .key.is-tool:not(.is-current):hover { border-color: var(--rfs-mute); } }
-.key.is-current { border-color: var(--rfs-primary); }
-.key.is-current svg { color: var(--rfs-primary); }
+@media (hover: hover) { .key.is-tool:not(.is-current):hover { border-color: var(--rfs-steel-ink); } }
+.key.is-current { border-color: var(--sm-accent); }
+.key.is-current svg { color: var(--sm-accent); }
 .key.is-down { transform: translateY(2px); border-bottom-width: 1px; }
 .kb__now { margin-top: var(--space-s); font: 500 var(--step--1)/1.4 var(--mono); color: var(--rfs-mute); }
 @media (max-width: 22.49rem) { .kb, .kb__now { display: none; } }
@@ -425,11 +486,10 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 .keylist dd { margin: 0; color: var(--rfs-mute); }
 @media (max-width: 39.99rem) { .key svg { display: none; } }
 @media (max-width: 59.99rem) { .key__name { display: none; } .key.is-tool { justify-content: flex-start; } }
-/* Wide screens show the names on the keys; the list stays for screen readers */
 @media (min-width: 60rem) { .keylist { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; } }
 .tools__notes { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-m) var(--space-xl); margin-top: var(--space-xl); color: var(--rfs-mute); }
-@media (min-width: 56rem) { .tools__notes { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-.tools__notes p { max-width: 40em; }
+@media (min-width: 56rem) { .tools__notes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.tools__notes p { max-width: 44em; }
 
 /* After the capture */
 .after__in { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-l) var(--space-xl); }
@@ -445,9 +505,9 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 
 /* Why it exists */
 .why blockquote { margin: 0; }
-.why blockquote p { font-size: clamp(1.9rem, 1rem + 3.4vw, 4.4rem); font-weight: 650; line-height: 1.1; letter-spacing: -0.03em; max-width: 19em; text-wrap: balance; }
+.why blockquote p { font-size: clamp(1.85rem, 1rem + 3.2vw, 4rem); font-weight: 650; line-height: 1.12; letter-spacing: -0.025em; max-width: 20em; text-wrap: balance; }
 .why mark {
-  color: var(--hl-ink, inherit); padding: 0 0.04em; box-decoration-break: clone; -webkit-box-decoration-break: clone;
+  color: var(--hl-ink, inherit); padding: 0 0.08em; box-decoration-break: clone; -webkit-box-decoration-break: clone;
   background: linear-gradient(var(--hl), var(--hl)) no-repeat 0 0 / 100% 100%;
 }
 .why__parts { margin-top: var(--space-l); max-width: 40em; font-size: var(--step-1); line-height: 1.45; color: var(--rfs-mute); }
@@ -456,14 +516,13 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 /* Install */
 .install__in { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-l) var(--space-xl); }
 @media (min-width: 56rem) { .install__in { grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); } }
-/* Step markers, drawn like the app's step tool */
 .install__head h2 { margin-bottom: var(--space-l); }
 .steps { list-style: none; margin: 0; padding: 0; counter-reset: step; display: grid; gap: var(--space-s); max-width: 30em; }
 .steps li { counter-increment: step; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 0.85rem; align-items: start; }
 .steps li > span { padding-top: 0.1em; }
 .steps li::before {
   content: counter(step); display: grid; place-items: center; width: 30px; height: 30px; box-sizing: border-box; border-radius: 50%;
-  background: var(--draw); color: #0C0D10; border: 2px solid #fff; font: 600 15px/1 var(--mono); filter: var(--draw-edge);
+  background: var(--draw); color: var(--marker-ink); border: 2px solid #FFFFFF; font: 600 15px/1 var(--mono); filter: var(--draw-edge);
 }
 .files { list-style: none; margin: 0; padding: 0; }
 .files li { display: grid; grid-template-columns: 10.5rem minmax(0, 1fr); gap: 0.15rem var(--space-s); padding-block: var(--space-s); border-top: 1px solid var(--rfs-line); }
@@ -471,34 +530,42 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 .files__os { font-weight: 650; }
 .files li:first-child .files__os { padding-top: 0.6rem; }
 .files__set > p + p:not(.files__note) { margin-top: var(--space-s); }
-/* One piece: the Recommended tag wraps to the next line before the name breaks; the name only breaks when it alone is too wide */
 .files__btn { margin-bottom: 0.35rem; }
 .files__file { font: 500 0.9em/1.4 var(--mono); color: var(--rfs-text); overflow-wrap: anywhere; }
 .files__name { display: inline-block; max-width: 100%; font: 500 0.9rem/1.4 var(--mono); overflow-wrap: anywhere; padding-block: 0.2rem; }
-.files__tag { display: inline-block; margin-left: 0.4rem; padding: 0.05em 0.5em; border: 1px solid currentColor; border-radius: 4px; color: var(--rfs-primary); font-size: 0.75rem; font-weight: 650; line-height: 1.5; vertical-align: 0.1em; }
 .files__note { color: var(--rfs-mute); }
 .files__note code { font-size: 0.92em; }
 @media (max-width: 30rem) { .files li { grid-template-columns: minmax(0, 1fr); } }
 .install__all { margin-top: var(--space-s); color: var(--rfs-mute); }
-.install__all b { color: var(--rfs-text); font-weight: 650; }
 .cargo { margin-top: var(--space-xl); }
 .cargo > p { margin-bottom: var(--space-2xs); }
-.cmd { display: flex; align-items: center; gap: var(--space-2xs); background: var(--rfs-code-bg); border: 1px solid var(--rfs-line); border-radius: 6px; padding-right: var(--space-2xs); }
-.cmd pre { flex: 1; min-width: 0; margin: 0; padding: 0.95em 1.1em; white-space: pre-wrap; font-size: 0.85rem; line-height: 1.5; }
-.cmd code { font-size: inherit; overflow-wrap: anywhere; }
-.copy {
-  flex: none; min-height: 36px; padding: 0.35em 0.9em; font: 500 0.85rem/1 var(--mono);
-  color: var(--rfs-mute); background: transparent; border: 1px solid var(--rfs-line-strong); border-radius: 4px; cursor: pointer;
-  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+.cargo .rfs-code-card pre {
+  margin: 0;
+  padding: 0.95rem 1.15rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+  line-height: 1.55;
 }
-@media (hover: hover) { .copy:hover { color: var(--rfs-text); border-color: var(--rfs-mute); } }
-.copy:active { transform: translateY(1px); }
+.cargo .rfs-code-copy {
+  background: var(--rfs-raised);
+  color: var(--rfs-text);
+  border: 1px solid var(--rfs-line-strong);
+  border-radius: 4px;
+  padding: 0.36rem 0.72rem;
+  font: 600 0.75rem/1 var(--mono);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+@media (hover: hover) {
+  .cargo .rfs-code-copy:hover { border-color: var(--rfs-beacon-ink); color: var(--rfs-beacon-ink); }
+}
 .install h3 { margin: var(--space-xl) 0 var(--space-s); font-size: var(--step-1); }
 .cli { margin: 0; }
-.cli div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.1rem var(--space-m); padding-block: 0.7rem; border-top: 1px solid var(--rfs-line); }
+.cli div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.1rem var(--space-m); padding-block: 0.7rem; border-top: 1px solid var(--rfs-line); align-items: baseline; }
 @media (min-width: 44rem) { .cli div { grid-template-columns: minmax(0, 21rem) minmax(0, 1fr); } }
 .cli code { font-size: 0.85rem; }
-.cli div { align-items: baseline; }
 .cli dd { margin: 0; color: var(--rfs-mute); font-size: var(--step--1); }
 .install__config { margin-top: var(--space-m); color: var(--rfs-mute); max-width: 46em; }
 
@@ -518,9 +585,19 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 .foot__links a { padding-block: 0.3rem; }
 .foot__colophon { flex-basis: 100%; }
 
-/* ---------- Motion ---------- */
+/* ---------- Motion & View Transitions ---------- */
+::view-transition-old(root),
+::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-new(root) {
+  animation: rfs-theme-reveal 460ms var(--ease) both;
+}
+@keyframes rfs-theme-reveal {
+  from { clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%)); }
+  to   { clip-path: circle(var(--vt-r, 150vmax) at var(--vt-x, 50%) var(--vt-y, 50%)); }
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  html { scroll-behavior: smooth; }
+  #page-scroll { scroll-behavior: smooth; }
   .js .stage.is-on .sel { animation: dim-in 360ms var(--ease) both; }
   .js .stage.is-ready .toolbar { animation: rise 160ms var(--ease) both; }
   .js .stage.is-ready .note-arrow__shaft { stroke-dasharray: 118; stroke-dashoffset: 118; animation: draw 300ms var(--ease) 140ms forwards; }
@@ -536,19 +613,24 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 @keyframes show { to { opacity: 1; } }
 @keyframes pop { from { opacity: 0; transform: scale(0.5); } }
 
+@media (prefers-reduced-transparency: reduce) {
+  .toolbar, .pill { background: var(--rfs-surface); }
+}
+
 @media print {
-  .bar nav, .toolbar, .toast, .sel, .cross, .pill, .ink, .copy { display: none !important; }
-  .stage { min-height: 0; }
+  .bar, .toolbar, .toast, .sel, .cross, .pill, .ink, .copy, #rfs-toast { display: none !important; }
+  .rfs-shell, .rfs-scroll-region { display: block; height: auto; overflow: visible; }
+  .stage { min-height: 0; background: none; }
   html:not(.js) .capture { box-shadow: none; }
 }
 
 /* Text inside drawn annotations */
 .ink-label { font: 500 13px var(--mono); fill: var(--rfs-text); paint-order: stroke; stroke: var(--rfs-bg); stroke-width: 4px; stroke-linejoin: round; }
-.ink-step { font: 600 15px var(--mono); fill: #0C0D10; }
+.ink-step { font: 600 15px var(--mono); fill: #050507; }
 .js .stage.no-sel .sel { box-shadow: 0 0 0 200vmax var(--dim); }
 
 /* No ligatures in mono text: Azeret Mono turns "(R)" into ® and "(C)" into ©. Kept last, with
    html :is() for weight, because a font shorthand (and .key kbd's all: unset) resets it. */
-html :is(code, kbd, pre, .pill, .kb__now, .key, .key kbd, .marker, .copy, .files__name, .files__file, .ink-label, .ink-step) {
+html :is(code, kbd, pre, .pill, .kb__now, .key, .key kbd, .marker, .copy, .files__name, .files__file, .ink-label, .ink-step, .theme-btn) {
   font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0;
 }

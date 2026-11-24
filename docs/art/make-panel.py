@@ -25,16 +25,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FONTS = os.path.join(HERE, "..", "assets", "fonts")
 OUT = os.path.join(HERE, "..", "assets")
 
-# RFS Nightshift and Dayshift; the overlay's dim is the app's (40% black), on Dayshift 30% of the
-# warm ink, as on the website (docs/DESIGN.md).
+# RFS Cyclorama Dawn v2.1.0 (LX 263 Dark and LX 512 Light); the overlay's dim is the app's
+# (40% black), on Light 30% of the cool charcoal ink, as on the website (docs/DESIGN.md).
 THEMES = {
-    "dark": dict(bg="#0C0D10", plate="#1A1D24", raised="#22262E", line="#262A33", strong="#363B46", ink="#E8E6E1",
-                 mute="#8A8F99", ember="#FF6A3D", on_ember="#0C0D10", mint="#3DDC97", dim="#000000", dim_a=0.40),
-    "light": dict(bg="#F6F5F2", plate="#FFFFFF", raised="#ECEAE4", line="#D6D3CB", strong="#BDB9AF", ink="#1A1B1E",
-                  mute="#666A73", ember="#C03B0A", on_ember="#FFFFFF", mint="#15794D", dim="#1A1B1E", dim_a=0.30),
+    "dark": dict(bg="#050507", plate="#0D0E12", raised="#161820", line="#242834", strong="#5D6476", ink="#F2F4F8",
+                 mute="#8F95A6", ember="#FF9254", on_ember="#050507", mint="#3DDC97", steel="#1F547A",
+                 beacon="#F06E2B", dim="#000000", dim_a=0.40),
+    "light": dict(bg="#F5F7F9", plate="#FFFFFF", raised="#E9EEF3", line="#CBD3DD", strong="#76808F", ink="#11141B",
+                  mute="#535B69", ember="#AD3D0A", on_ember="#FFFFFF", mint="#15794D", steel="#164669",
+                  beacon="#BD4811", dim="#11141B", dim_a=0.30),
 }
-# The app's five annotation presets: red, blue, green, yellow, mauve.
-PRESETS = ["#ff6e7a", "#5cb8ff", "#3ddc97", "#ffc247", "#b78cff"]
+# The app's five annotation presets: Signal Crimson red, Glacial Steel blue, Mint green, Amber yellow, violet mauve.
+PRESETS = ["#ff5c6c", "#74b8e8", "#3ddc97", "#ffc247", "#b78cff"]
 RED, BLUE, YELLOW = 0, 1, 3
 
 W, H = 1000, 520
@@ -65,8 +67,8 @@ def font(name):
     return _fonts[name]
 
 
-SANS = ("bricolage-grotesque-latin.woff2", (("opsz", 14), ("wght", 600)))
-SANS_R = ("bricolage-grotesque-latin.woff2", (("opsz", 14), ("wght", 450)))
+SANS = ("albert-sans-latin.woff2", (("wght", 600),))
+SANS_R = ("albert-sans-latin.woff2", (("wght", 450),))
 MONO = ("azeret-mono-latin.woff2", (("wght", 500),))
 
 
@@ -179,16 +181,17 @@ def build(theme):
     o.append(f"<style>{base}@media (prefers-reduced-motion:no-preference){{{''.join(css)}{rules}}}</style>")
 
     # --- the plate and the screen being captured ---
-    o.append(f'<rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="22" fill="{c["plate"]}" stroke="{c["line"]}"/>')
-    o.append(f'<clipPath id="scr"><rect x="{sx}" y="{sy}" width="{sw}" height="{sh}" rx="12"/></clipPath>')
+    o.append(f'<clipPath id="plate"><rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="12"/></clipPath>')
+    o.append(f'<rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="12" fill="{c["plate"]}" stroke="{c["line"]}"/>')
+    o.append(f'<rect x="1" y="1" width="{W - 2}" height="3" fill="url(#hz-{theme})" clip-path="url(#plate)"/>')
+    o.append(f'<clipPath id="scr"><rect x="{sx}" y="{sy}" width="{sw}" height="{sh}" rx="8"/></clipPath>')
     o.append('<g clip-path="url(#scr)">')
     o.append(f'<rect x="{sx}" y="{sy}" width="{sw}" height="{sh}" fill="{c["bg"]}"/>')
-    # A window: title bar, a page of text on the left, a chart card on the right.
-    o.append(f'<rect x="70" y="56" width="860" height="380" rx="10" fill="{c["plate"]}" stroke="{c["line"]}"/>')
-    o.append(f'<rect x="70.5" y="56.5" width="859" height="33" rx="10" fill="{c["raised"]}"/>')
-    for i in range(3):
-        o.append(f'<circle cx="{92 + i * 18}" cy="73" r="5" fill="{c["strong"]}"/>')
-    o.append(text("Weekly report", 500, 78, 14, SANS_R, c["mute"], anchor="middle"))
+    # A window: clean title bar (no fake window dots), a page of text on the left, a chart card on the right.
+    o.append(f'<rect x="70" y="56" width="860" height="380" rx="8" fill="{c["plate"]}" stroke="{c["line"]}"/>')
+    o.append(f'<rect x="70.5" y="56.5" width="859" height="33" rx="8" fill="{c["raised"]}"/>')
+    o.append(f'<line x1="71" y1="89.5" x2="929" y2="89.5" stroke="{c["line"]}"/>')
+    o.append(text("WEEKLY REPORT", 92, 77, 12, MONO, c["mute"], anchor="start"))
     o.append(f'<rect x="104" y="122" width="250" height="18" rx="4" fill="{c["ink"]}" fill-opacity=".85"/>')
     for i, wd in enumerate((330, 300, 344, 260, 318, 290, 336, 210)):
         o.append(f'<rect x="104" y="{162 + i * 26}" width="{wd}" height="10" rx="5" fill="{c["strong"]}"/>')
@@ -238,7 +241,7 @@ def build(theme):
     o.append(f'<g class="box"><path class="boxline" d="M{bx} {by}h{bw}v{bh}h{-bw}z" fill="none" stroke="{PRESETS[RED]}" stroke-width="4" '
              f'stroke-linejoin="round" stroke-dasharray="{blen}"/></g>')
     mx, my = MARK
-    o.append(f'<g class="mark"><circle cx="{mx}" cy="{my}" r="14" fill="{PRESETS[YELLOW]}"/>{text("1", mx, my + 5.5, 16, SANS, "#1A1B1E", anchor="middle")}</g>')
+    o.append(f'<g class="mark"><circle cx="{mx}" cy="{my}" r="14" fill="{PRESETS[YELLOW]}"/>{text("1", mx, my + 5.5, 16, SANS, "#050507", anchor="middle")}</g>')
 
     # --- the toolbar under the selection: tool keys, then the five presets ---
     tb_w = len(TOOLS) * 30 + 22 + len(PRESETS) * 26 + 16
@@ -290,7 +293,10 @@ def build(theme):
             o.append(f'<g class="{cls}">{"".join(g)}</g>' if lit else "".join(g))
         x = kx + (4 if keys else 0) + advance(label, 15, SANS_R) + 30
 
-    defs = "".join(f'<path id="{gid}" d="{d}"/>' for gid, d in _glyphs.values() if d)
+    defs = (f'<linearGradient id="hz-{theme}" x1="0" y1="0" x2="1" y2="0">'
+            f'<stop offset="0%" stop-color="{c["steel"]}"/>'
+            f'<stop offset="100%" stop-color="{c["beacon"]}"/></linearGradient>'
+            + "".join(f'<path id="{gid}" d="{d}"/>' for gid, d in _glyphs.values() if d))
     o.insert(1, f"<defs>{defs}</defs>")
     o.append("</svg>")
     return "".join(o)

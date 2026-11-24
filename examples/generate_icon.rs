@@ -1,8 +1,8 @@
-//! Generate the screen-mark icon (capture brackets + an Ember arrow) using tiny-skia.
+//! Generate the screen-mark icon (capture brackets + a Beacon Orange arrow) using tiny-skia.
 //! Run: cargo run --example generate_icon
 //!
-//! RFS Nightshift badge: a graphite tile with selection brackets in the text
-//! color framing an Ember arrow. Palette: Real-Fruit-Snacks/rfs-brand/BRAND.md.
+//! RFS Cyclorama Dawn v2.1.0 badge: a matte dark LX 263 tile with selection brackets in the text
+//! color framing a Beacon Orange arrow. Palette: Real-Fruit-Snacks/rfs-brand.
 
 fn main() {
     generate_icon(256, "icon_256.png");
@@ -20,7 +20,7 @@ fn generate_icon(size: u32, path: &str) {
     let corner_r = 26.0 * s;
     if let Some(bg_path) = rounded_rect(0.0, 0.0, size as f32, size as f32, corner_r) {
         let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba(0.047, 0.051, 0.063, 1.0).unwrap()); // #0c0d10 (bg)
+        paint.set_color(tiny_skia::Color::from_rgba(0.020, 0.020, 0.027, 1.0).unwrap()); // #050507 (bg)
         paint.anti_alias = true;
         pixmap.fill_path(
             &bg_path,
@@ -42,7 +42,7 @@ fn generate_icon(size: u32, path: &str) {
         corner_r - inset,
     ) {
         let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba(0.075, 0.082, 0.102, 1.0).unwrap()); // #13151a (surface)
+        paint.set_color(tiny_skia::Color::from_rgba(0.051, 0.055, 0.071, 1.0).unwrap()); // #0d0e12 (surface)
         paint.anti_alias = true;
         pixmap.fill_path(
             &inner_path,
@@ -59,7 +59,7 @@ fn generate_icon(size: u32, path: &str) {
     // Scale bracket width for small sizes
     let bracket_w = if size <= 32 { 5.0 * s } else { 3.5 * s };
 
-    let bracket_color = tiny_skia::Color::from_rgba(0.910, 0.902, 0.882, 1.0).unwrap(); // #e8e6e1 (text)
+    let bracket_color = tiny_skia::Color::from_rgba(0.949, 0.957, 0.973, 1.0).unwrap(); // #f2f4f8 (text)
     let mut bp = tiny_skia::Paint::default();
     bp.set_color(bracket_color);
     bp.anti_alias = true;
@@ -87,7 +87,7 @@ fn generate_icon(size: u32, path: &str) {
     // ─── 4. The mark: an Ember arrow, the tool's signature annotation ───
     let cx = size as f32 / 2.0;
     let cy = size as f32 / 2.0;
-    let ember = tiny_skia::Color::from_rgba(1.0, 0.416, 0.239, 1.0).unwrap(); // #ff6a3d
+    let ember = tiny_skia::Color::from_rgba(1.0, 0.573, 0.329, 1.0).unwrap(); // #ff9254 (Beacon Orange)
     let shaft_w = if size <= 32 { 7.0 * s } else { 6.0 * s };
     // Tail at lower-left, head at upper-right; the head is a filled triangle.
     let (tx, ty) = (cx - 22.0 * s, cy + 22.0 * s);
@@ -146,7 +146,7 @@ fn generate_icon(size: u32, path: &str) {
             rounded_rect(0.5, 0.5, size as f32 - 1.0, size as f32 - 1.0, corner_r)
         {
             let mut border = tiny_skia::Paint::default();
-            border.set_color(tiny_skia::Color::from_rgba(0.149, 0.165, 0.200, 1.0).unwrap()); // #262a33 (line)
+            border.set_color(tiny_skia::Color::from_rgba(0.141, 0.157, 0.204, 1.0).unwrap()); // #242834 (line)
             border.anti_alias = true;
             let bord_stroke = tiny_skia::Stroke {
                 width: 1.0 * s,
