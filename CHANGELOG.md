@@ -2,6 +2,14 @@
 
 All notable changes to screen-mark will be documented in this file.
 
+## [2.4.4] - 2026-11-24
+
+Upgraded the desktop application, installer, taskbar, window, tray, and notification icons to the full Cyclorama Dawn `v2.1.0` tile.
+
+### Changed
+- Redesigned `assets/icon.png`, `docs/icon_256.png`, and `examples/generate_icon.rs` on the canonical Cyclorama Dawn `#050507` tile with rising Glacial Steel → Maritime Beacon Orange wash, crisp hairline border, industrial mitered `#F4F5F8` viewfinder brackets, optically centered Beacon Orange annotation arrow, and Steel → Beacon signature bar.
+- Packaged `assets/icon.ico` as a true 8-size multi-resolution Windows icon (`16`, `20`, `24`, `32`, `40`, `48`, `64`, `256px`) with small-size stroke tuning for sharp Explorer, taskbar, and tray rendering.
+
 ## [2.4.3] - 2026-11-24
 
 Full Cyclorama Dawn `v2.1.0` desktop UI parity across embedded typography, Windows 11 native titlebar chrome, horizon rules, and annotation swatches.

@@ -1,208 +1,78 @@
-//! Generate the screen-mark icon (capture brackets + a Beacon Orange arrow) using tiny-skia.
+//! Generate the screen-mark Cyclorama Dawn v2.1.0 icon (mitered capture brackets +
+//! Beacon Orange arrow + rising Steel -> Beacon horizon wash & rule) using resvg.
 //! Run: cargo run --example generate_icon
 //!
-//! RFS Cyclorama Dawn v2.1.0 badge: a matte dark LX 263 tile with selection brackets in the text
-//! color framing a Beacon Orange arrow. Palette: Real-Fruit-Snacks/rfs-brand.
+//! Palette: Real-Fruit-Snacks/rfs-brand.
+
+fn emblem_svg(small: bool) -> String {
+    let wash_op = if small { "0.86" } else { "0.74" };
+    let frame_stroke = if small {
+        "#3B3E4A"
+    } else {
+        "rgba(255,255,255,0.16)"
+    };
+    let bw = if small { 3.6 } else { 2.6 };
+    let aw = if small { 4.4 } else { 3.4 };
+    let arrow_col = if small { "#FF9254" } else { "#F06E2B" };
+    let bar_h = if small { 4.2 } else { 3.6 };
+    let bar_y = if small { 50.2 } else { 50.5 };
+    let bar_r = bar_h / 2.0;
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="cyc-h" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#133954"/>
+      <stop offset="44%" stop-color="#1F547A"/>
+      <stop offset="76%" stop-color="#CC5016"/>
+      <stop offset="100%" stop-color="#F06E2B"/>
+    </linearGradient>
+    <linearGradient id="cyc-f" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="42%" stop-color="#FFFFFF" stop-opacity="0.08"/>
+      <stop offset="74%" stop-color="#FFFFFF" stop-opacity="0.58"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="1"/>
+    </linearGradient>
+    <mask id="cyc-m" maskContentUnits="objectBoundingBox">
+      <rect width="1" height="1" fill="url(#cyc-f)"/>
+    </mask>
+    <linearGradient id="rule-d" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#74B8E8"/>
+      <stop offset="52%" stop-color="#3B85B8"/>
+      <stop offset="100%" stop-color="#F06E2B"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#050507"/>
+  <rect width="64" height="64" rx="14" fill="url(#cyc-h)" opacity="{wash_op}" mask="url(#cyc-m)"/>
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="13.25" fill="none" stroke="{frame_stroke}" stroke-width="1.5"/>
+  <g fill="none" stroke="#F4F5F8" stroke-width="{bw}" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M12.5 19.5 V11.5 H20.5"/>
+    <path d="M43.5 11.5 H51.5 V19.5"/>
+    <path d="M12.5 35.5 V43.5 H20.5"/>
+    <path d="M43.5 43.5 H51.5 V35.5"/>
+  </g>
+  <line x1="21.5" y1="36.2" x2="36.2" y2="21.5" stroke="{arrow_col}" stroke-width="{aw}" stroke-linecap="square"/>
+  <polygon points="41.8,15.9 30.2,18.4 39.3,27.5" fill="{arrow_col}"/>
+  <rect x="11.0" y="{bar_y}" width="42.0" height="{bar_h}" rx="{bar_r:.2}" fill="url(#rule-d)"/>
+</svg>"##
+    )
+}
+
+fn render_png(size: u32, path: &str) {
+    let svg = emblem_svg(size <= 32);
+    let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default())
+        .expect("valid emblem SVG");
+    let mut pixmap = tiny_skia::Pixmap::new(size, size).expect("non-zero icon size");
+    let scale = size as f32 / 64.0;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    pixmap.save_png(path).expect("save PNG");
+}
 
 fn main() {
-    generate_icon(256, "icon_256.png");
-    generate_icon(256, "assets/icon.png");
-    generate_icon(48, "icon_48.png");
-    generate_icon(16, "icon_16.png");
+    render_png(256, "assets/icon.png");
+    render_png(256, "docs/icon_256.png");
     println!("Icons generated.");
 }
-
-fn generate_icon(size: u32, path: &str) {
-    let mut pixmap = tiny_skia::Pixmap::new(size, size).unwrap();
-    let s = size as f32 / 128.0; // design is 128x128
-
-    // ─── 1. Rounded square background ───
-    let corner_r = 26.0 * s;
-    if let Some(bg_path) = rounded_rect(0.0, 0.0, size as f32, size as f32, corner_r) {
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba(0.020, 0.020, 0.027, 1.0).unwrap()); // #050507 (bg)
-        paint.anti_alias = true;
-        pixmap.fill_path(
-            &bg_path,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-    }
-
-    // ─── 2. Subtle inner glow / vignette ───
-    // A slightly lighter rectangle inset to give depth
-    let inset = 3.0 * s;
-    if let Some(inner_path) = rounded_rect(
-        inset,
-        inset,
-        size as f32 - inset * 2.0,
-        size as f32 - inset * 2.0,
-        corner_r - inset,
-    ) {
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba(0.051, 0.055, 0.071, 1.0).unwrap()); // #0d0e12 (surface)
-        paint.anti_alias = true;
-        pixmap.fill_path(
-            &inner_path,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-    }
-
-    // ─── 3. Selection brackets (corners) ───
-    let bracket_inset = 18.0 * s;
-    let bracket_len = 22.0 * s;
-    // Scale bracket width for small sizes
-    let bracket_w = if size <= 32 { 5.0 * s } else { 3.5 * s };
-
-    let bracket_color = tiny_skia::Color::from_rgba(0.949, 0.957, 0.973, 1.0).unwrap(); // #f2f4f8 (text)
-    let mut bp = tiny_skia::Paint::default();
-    bp.set_color(bracket_color);
-    bp.anti_alias = true;
-    let bs = tiny_skia::Stroke {
-        width: bracket_w,
-        line_cap: tiny_skia::LineCap::Round,
-        line_join: tiny_skia::LineJoin::Round,
-        ..tiny_skia::Stroke::default()
-    };
-
-    let x1 = bracket_inset;
-    let y1 = bracket_inset;
-    let x2 = size as f32 - bracket_inset;
-    let y2 = size as f32 - bracket_inset;
-
-    // Top-left
-    draw_bracket(&mut pixmap, x1, y1, bracket_len, true, true, &bp, &bs);
-    // Top-right
-    draw_bracket(&mut pixmap, x2, y1, bracket_len, false, true, &bp, &bs);
-    // Bottom-left
-    draw_bracket(&mut pixmap, x1, y2, bracket_len, true, false, &bp, &bs);
-    // Bottom-right
-    draw_bracket(&mut pixmap, x2, y2, bracket_len, false, false, &bp, &bs);
-
-    // ─── 4. The mark: an Ember arrow, the tool's signature annotation ───
-    let cx = size as f32 / 2.0;
-    let cy = size as f32 / 2.0;
-    let ember = tiny_skia::Color::from_rgba(1.0, 0.573, 0.329, 1.0).unwrap(); // #ff9254 (Beacon Orange)
-    let shaft_w = if size <= 32 { 7.0 * s } else { 6.0 * s };
-    // Tail at lower-left, head at upper-right; the head is a filled triangle.
-    let (tx, ty) = (cx - 22.0 * s, cy + 22.0 * s);
-    let (hx, hy) = (cx + 24.0 * s, cy - 24.0 * s);
-    let head_len = 22.0 * s;
-    let head_half = 12.0 * s;
-    // Shaft stops short of the tip so the triangle owns the point.
-    let (dx, dy) = (hx - tx, hy - ty);
-    let len = (dx * dx + dy * dy).sqrt();
-    let (ux, uy) = (dx / len, dy / len);
-    let (sx2, sy2) = (hx - ux * head_len * 0.75, hy - uy * head_len * 0.75);
-
-    let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(tx, ty);
-    pb.line_to(sx2, sy2);
-    if let Some(shaft) = pb.finish() {
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color(ember);
-        paint.anti_alias = true;
-        let stroke = tiny_skia::Stroke {
-            width: shaft_w,
-            line_cap: tiny_skia::LineCap::Round,
-            ..tiny_skia::Stroke::default()
-        };
-        pixmap.stroke_path(
-            &shaft,
-            &paint,
-            &stroke,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-    }
-    let (bx, by) = (hx - ux * head_len, hy - uy * head_len);
-    let (px, py) = (-uy, ux);
-    let mut hb = tiny_skia::PathBuilder::new();
-    hb.move_to(hx, hy);
-    hb.line_to(bx + px * head_half, by + py * head_half);
-    hb.line_to(bx - px * head_half, by - py * head_half);
-    hb.close();
-    if let Some(head) = hb.finish() {
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color(ember);
-        paint.anti_alias = true;
-        pixmap.fill_path(
-            &head,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            tiny_skia::Transform::identity(),
-            None,
-        );
-    }
-
-    // ─── 5. Outer badge border (very subtle) ───
-    if size >= 48 {
-        if let Some(badge_path) =
-            rounded_rect(0.5, 0.5, size as f32 - 1.0, size as f32 - 1.0, corner_r)
-        {
-            let mut border = tiny_skia::Paint::default();
-            border.set_color(tiny_skia::Color::from_rgba(0.141, 0.157, 0.204, 1.0).unwrap()); // #242834 (line)
-            border.anti_alias = true;
-            let bord_stroke = tiny_skia::Stroke {
-                width: 1.0 * s,
-                ..tiny_skia::Stroke::default()
-            };
-            pixmap.stroke_path(
-                &badge_path,
-                &border,
-                &bord_stroke,
-                tiny_skia::Transform::identity(),
-                None,
-            );
-        }
-    }
-
-    pixmap.save_png(path).unwrap();
-}
-
-// ─── Helper: rounded rectangle path ───
-fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
-    let r = r.min(w / 2.0).min(h / 2.0);
-    let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(x + r, y);
-    pb.line_to(x + w - r, y);
-    pb.quad_to(x + w, y, x + w, y + r);
-    pb.line_to(x + w, y + h - r);
-    pb.quad_to(x + w, y + h, x + w - r, y + h);
-    pb.line_to(x + r, y + h);
-    pb.quad_to(x, y + h, x, y + h - r);
-    pb.line_to(x, y + r);
-    pb.quad_to(x, y, x + r, y);
-    pb.close();
-    pb.finish()
-}
-
-// ─── Helper: L-shaped bracket ───
-#[allow(clippy::too_many_arguments)]
-fn draw_bracket(
-    pixmap: &mut tiny_skia::Pixmap,
-    x: f32,
-    y: f32,
-    len: f32,
-    left: bool,
-    top: bool,
-    paint: &tiny_skia::Paint,
-    stroke: &tiny_skia::Stroke,
-) {
-    let dx = if left { len } else { -len };
-    let dy = if top { len } else { -len };
-    let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(x + dx, y);
-    pb.line_to(x, y);
-    pb.line_to(x, y + dy);
-    if let Some(path) = pb.finish() {
-        pixmap.stroke_path(&path, paint, stroke, tiny_skia::Transform::identity(), None);
-    }
-}
-
-// ─── Helper: full droplet path ───
