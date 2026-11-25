@@ -728,6 +728,7 @@ impl HistoryView {
             HEADER_H - 3.0,
             crate::theme::bg_1(),
         );
+        crate::theme::draw_horizon_rule(&mut pixmap, 0.0, 0.0, WIN_W as f32, 2.0);
         draw_label(
             &mut pixmap,
             PADDING,
@@ -806,6 +807,7 @@ pub struct HistoryWindow {
     pub window: Arc<Window>,
     pub surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
     pub view: HistoryView,
+    applied_theme: Option<crate::theme::ThemeMode>,
 }
 
 impl HistoryWindow {
@@ -813,10 +815,12 @@ impl HistoryWindow {
         window: Arc<Window>,
         surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
     ) -> Self {
+        crate::theme::apply_window_chrome(&window);
         Self {
             window,
             surface,
             view: HistoryView::new(),
+            applied_theme: Some(crate::theme::mode()),
         }
     }
 
@@ -839,6 +843,11 @@ impl HistoryWindow {
     /// Draw the view, scaling the logical pixmap to the physical surface
     /// (nearest neighbour) so the window is usable on high-DPI displays.
     pub fn render(&mut self) {
+        let mode = crate::theme::mode();
+        if self.applied_theme != Some(mode) {
+            crate::theme::apply_window_chrome(&self.window);
+            self.applied_theme = Some(mode);
+        }
         let pixmap = self.view.render();
         let phys = self.window.inner_size();
         let pw = phys.width.max(1);

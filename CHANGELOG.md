@@ -2,6 +2,18 @@
 
 All notable changes to screen-mark will be documented in this file.
 
+## [2.4.3] - 2026-11-24
+
+Full Cyclorama Dawn `v2.1.0` desktop UI parity across embedded typography, Windows 11 native titlebar chrome, horizon rules, and annotation swatches.
+
+### Changed
+- Replaced the embedded UI font (`assets/font.ttf`) with static **Albert Sans** (`OFL-1.1`), matching the Cyclorama Dawn brand typeface while trimming ~485 KB from the binary.
+- Added Windows 11 DWM titlebar theme synchronisation (`DWMWA_USE_IMMERSIVE_DARK_MODE`, `DWMWA_CAPTION_COLOR`, `DWMWA_TEXT_COLOR`, `DWMWA_BORDER_COLOR`) on Settings and History windows, live-updated on Dark (`LX 263`) / Light (`LX 512`) toggles.
+- Added the 2px Cyclorama Dawn Steel-to-Beacon horizon rule across Settings, History, notification toasts, and the floating capture toolbar, and upgraded the Settings primary `Save & Close` CTA to the Steel-to-Beacon gradient with verified WCAG AA+ contrast.
+
+### Fixed
+- Synced the `red` and `blue` colour swatches in Settings › General with Cyclorama Dawn Signal Crimson (`#FF5C6C`) and Glacial Steel (`#74B8E8`) to match the annotation presets.
+
 ## [2.4.2] - 2026-11-24
 
 Visual refresh to the Cyclorama Dawn `v2.1.0` palette. Capture, annotation, hotkeys, and configuration behaviour are unchanged.

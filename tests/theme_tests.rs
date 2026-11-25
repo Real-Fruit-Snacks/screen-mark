@@ -83,6 +83,39 @@ fn accents_pass_aa_on_every_surface_in_both_modes() {
         // Text on an accent-filled control.
         let c = contrast(theme::text_on_accent(), theme::accent());
         assert!(c >= 4.5, "{mode:?}: text_on_accent on accent is {c:.2}:1");
+
+        // Primary CTA white ink on both Steel -> Beacon Fill gradient stops.
+        let c_steel = contrast(theme::CTA_INK, theme::steel());
+        let c_beacon = contrast(theme::CTA_INK, theme::beacon_fill());
+        assert!(
+            c_steel >= 4.5 && c_beacon >= 4.5,
+            "{mode:?}: CTA_INK contrast steel={c_steel:.2}:1 beacon_fill={c_beacon:.2}:1"
+        );
+    }
+    theme::set_mode(ThemeMode::Dark);
+}
+
+#[test]
+fn horizon_rule_runs_steel_to_beacon_in_both_modes() {
+    let _mode = MODE.lock().unwrap_or_else(|e| e.into_inner());
+    for mode in [ThemeMode::Dark, ThemeMode::Light] {
+        theme::set_mode(mode);
+        let mut p = tiny_skia::Pixmap::new(100, 4).unwrap();
+        theme::draw_horizon_rule(&mut p, 0.0, 0.0, 100.0, 2.0);
+        let left = p.pixel(0, 0).unwrap();
+        let right = p.pixel(99, 0).unwrap();
+        assert_eq!((left.red(), left.green(), left.blue()), theme::steel());
+        let b = theme::beacon();
+        assert!(
+            (right.red() as i16 - b.0 as i16).abs() <= 4
+                && (right.green() as i16 - b.1 as i16).abs() <= 4
+                && (right.blue() as i16 - b.2 as i16).abs() <= 4,
+            "{mode:?}: right edge ({},{},{}) did not reach beacon {:?}",
+            right.red(),
+            right.green(),
+            right.blue(),
+            b
+        );
     }
     theme::set_mode(ThemeMode::Dark);
 }

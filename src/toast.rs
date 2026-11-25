@@ -241,13 +241,24 @@ pub fn render(spec: &Spec, scale: f32) -> Pixmap {
         sk(crate::theme::bg_1(), 1.0),
     );
 
-    // Status bar on the left edge.
+    // 2px Cyclorama Dawn horizon rule along the top inner edge.
+    let rule_h = (2.0 * s).round().max(2.0);
+    crate::theme::draw_horizon_rule(&mut p, 1.0, 1.0, pw as f32 - 2.0, rule_h);
+
+    // Status bar on the left edge, seated cleanly below the horizon rule.
     let bar = match spec.kind {
         Kind::Success => crate::theme::accent(),
         Kind::Error => crate::theme::red(),
         Kind::Info => crate::theme::text_muted(),
     };
-    fill(&mut p, 1.0, 1.0, 3.0 * s, ph as f32 - 2.0, sk(bar, 1.0));
+    fill(
+        &mut p,
+        1.0,
+        1.0 + rule_h,
+        3.0 * s,
+        (ph as f32 - 2.0 - rule_h).max(1.0),
+        sk(bar, 1.0),
+    );
 
     let pad = 14.0 * s;
     let mut tx = pad + 3.0 * s;

@@ -46,6 +46,9 @@ struct Palette {
     text_on_accent: Rgb,
     accent: Rgb,
     accent_alt: Rgb,
+    steel: Rgb,
+    beacon: Rgb,
+    beacon_fill: Rgb,
     warm: Rgb,
     red: Rgb,
     orange: Rgb,
@@ -69,6 +72,9 @@ const DARK: Palette = Palette {
     text_on_accent: (0x05, 0x05, 0x07),
     accent: (0xff, 0x92, 0x54),
     accent_alt: (0xff, 0xc2, 0x47),
+    steel: (0x1f, 0x54, 0x7a),
+    beacon: (0xf0, 0x6e, 0x2b),
+    beacon_fill: (0xbd, 0x48, 0x11),
     warm: (0xff, 0xc2, 0x47),
     red: (0xff, 0x5c, 0x6c),
     orange: (0xff, 0xc2, 0x47),
@@ -91,6 +97,9 @@ const LIGHT: Palette = Palette {
     text_on_accent: (0xff, 0xff, 0xff),
     accent: (0xad, 0x3d, 0x0a),
     accent_alt: (0x88, 0x58, 0x00),
+    steel: (0x16, 0x46, 0x69),
+    beacon: (0xad, 0x3d, 0x0a),
+    beacon_fill: (0xad, 0x3d, 0x0a),
     warm: (0x88, 0x58, 0x00),
     red: (0xb9, 0x1c, 0x2e),
     orange: (0x88, 0x58, 0x00),
@@ -125,10 +134,130 @@ token!(text_faint);
 token!(text_on_accent);
 token!(accent);
 token!(accent_alt);
+token!(steel);
+token!(beacon);
+token!(beacon_fill);
 token!(warm);
 token!(red);
 token!(orange);
 token!(violet);
+
+/// Ink colour for white-on-gradient primary CTAs (WCAG AA+ on both `steel()`
+/// and `beacon_fill()` in Dark and Light modes).
+pub const CTA_INK: Rgb = (0xff, 0xff, 0xff);
+
+/// Draw the 2px Cyclorama Dawn horizon rule (Steel 0%..35% -> Beacon 100%).
+pub fn draw_horizon_rule(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w: f32, h: f32) {
+    let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) else {
+        return;
+    };
+    let stops = vec![
+        tiny_skia::GradientStop::new(0.0, skia(steel(), 1.0)),
+        tiny_skia::GradientStop::new(0.35, skia(steel(), 1.0)),
+        tiny_skia::GradientStop::new(1.0, skia(beacon(), 1.0)),
+    ];
+    let Some(shader) = tiny_skia::LinearGradient::new(
+        tiny_skia::Point::from_xy(x, y),
+        tiny_skia::Point::from_xy(x + w, y),
+        stops,
+        tiny_skia::SpreadMode::Pad,
+        tiny_skia::Transform::identity(),
+    ) else {
+        return;
+    };
+    let paint = tiny_skia::Paint {
+        shader,
+        anti_alias: false,
+        ..tiny_skia::Paint::default()
+    };
+    pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Fill a primary CTA rectangle with the Cyclorama Dawn Steel -> Beacon
+/// gradient (`steel()` -> `beacon_fill()`).
+pub fn fill_cta_gradient(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w: f32, h: f32) {
+    let Some(rect) = tiny_skia::Rect::from_xywh(x, y, w, h) else {
+        return;
+    };
+    let stops = vec![
+        tiny_skia::GradientStop::new(0.0, skia(steel(), 1.0)),
+        tiny_skia::GradientStop::new(1.0, skia(beacon_fill(), 1.0)),
+    ];
+    let Some(shader) = tiny_skia::LinearGradient::new(
+        tiny_skia::Point::from_xy(x, y),
+        tiny_skia::Point::from_xy(x + w, y),
+        stops,
+        tiny_skia::SpreadMode::Pad,
+        tiny_skia::Transform::identity(),
+    ) else {
+        return;
+    };
+    let paint = tiny_skia::Paint {
+        shader,
+        anti_alias: false,
+        ..tiny_skia::Paint::default()
+    };
+    pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Sync the OS titlebar / frame chrome with the active Cyclorama Dawn mode.
+/// On Windows 11 (and dark mode on Windows 10 1903+), this updates the DWM
+/// immersive dark mode flag plus caption, title text, and frame border colours.
+#[cfg(target_os = "windows")]
+pub fn apply_window_chrome(window: &winit::window::Window) {
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+        DWMWA_USE_IMMERSIVE_DARK_MODE,
+    };
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    fn colorref((r, g, b): Rgb) -> u32 {
+        (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+    }
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = HWND(win32.hwnd.get() as *mut core::ffi::c_void);
+    let dark = BOOL::from(mode() == ThemeMode::Dark);
+    let caption = colorref(bg_0());
+    let text = colorref(text_normal());
+    let border_col = colorref(border());
+
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark as *const BOOL as *const _,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR,
+            &caption as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TEXT_COLOR,
+            &text as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_col as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn apply_window_chrome(_window: &winit::window::Window) {}
 
 /// Convert a token to a `tiny_skia::Color` at the given alpha (0.0..=1.0).
 pub fn skia(rgb: Rgb, alpha: f32) -> tiny_skia::Color {

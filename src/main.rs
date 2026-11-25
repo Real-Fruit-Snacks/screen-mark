@@ -1118,6 +1118,9 @@ impl App {
                 if let Some(ref sw) = self.settings_window {
                     sw.window.request_redraw();
                 }
+                if let Some(ref hw) = self.history_window {
+                    hw.window.request_redraw();
+                }
             }
             Outcome::Nothing => {}
         }
@@ -1158,7 +1161,10 @@ impl App {
             screen_mark::theme::set_mode(self.config.theme_mode());
             self.hotkeys.resume();
         }
-        // Settings can toggle autostart — keep the tray checkbox in sync.
+        // Settings can toggle theme or autostart — keep open windows and tray in sync.
+        if let Some(ref hw) = self.history_window {
+            hw.window.request_redraw();
+        }
         if let Some(ref tray) = self.tray {
             tray.set_autostart(screen_mark::autostart::is_enabled());
         }

@@ -920,6 +920,16 @@ fn render_toolbar(
             Transform::identity(),
             None,
         );
+        // 2px Cyclorama Dawn horizon rule inset clear of the rounded corners.
+        if toolbar.width > 16.0 {
+            crate::theme::draw_horizon_rule(
+                pixmap,
+                toolbar.x + 8.0,
+                toolbar.y + 0.5,
+                toolbar.width - 16.0,
+                2.0,
+            );
+        }
         // Subtle border
         let mut border_paint = Paint::default();
         border_paint.set_color(crate::theme::skia(crate::theme::text_normal(), 0.12));

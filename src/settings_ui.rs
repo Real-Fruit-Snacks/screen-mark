@@ -49,8 +49,8 @@ const FOOTER_TOP: f32 = WIN_H as f32 - 92.0;
 
 /// Color choices available in settings (name, R, G, B).
 const COLOR_CHOICES: &[(&str, u8, u8, u8)] = &[
-    ("red", 0xff, 0x6e, 0x7a),
-    ("blue", 0x5c, 0xb8, 0xff),
+    ("red", 0xff, 0x5c, 0x6c),
+    ("blue", 0x74, 0xb8, 0xe8),
     ("green", 0x3d, 0xdc, 0x97),
     ("yellow", 0xff, 0xc2, 0x47),
     ("mauve", 0xb7, 0x8c, 0xff),
@@ -836,6 +836,7 @@ impl SettingsView {
             WIN_H as f32,
             crate::theme::bg_1(),
         );
+        crate::theme::draw_horizon_rule(&mut p, 0.0, 0.0, WIN_W as f32, 2.0);
         self.hits.clear();
         self.widgets.clear();
 
@@ -1591,7 +1592,7 @@ impl SettingsView {
         text: &str,
         action: Action,
     ) {
-        fill(p, x, y, w, h, crate::theme::accent());
+        crate::theme::fill_cta_gradient(p, x, y, w, h);
         if self.is_hovered(x, y, w, h) {
             outline(p, x, y, w, h, crate::theme::text_normal());
         }
@@ -1602,7 +1603,7 @@ impl SettingsView {
             y + (h - 12.0) / 2.0 - 1.0,
             text,
             12.0,
-            crate::theme::text_on_accent(),
+            crate::theme::CTA_INK,
         );
         self.widget((x, y, w, h), action, Role::Button, text, None);
     }
@@ -1814,6 +1815,7 @@ pub struct SettingsWindow {
     pub surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
     pub view: SettingsView,
     pub needs_redraw: bool,
+    applied_theme: Option<crate::theme::ThemeMode>,
 }
 
 impl SettingsWindow {
@@ -1822,11 +1824,13 @@ impl SettingsWindow {
         surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
         view: SettingsView,
     ) -> Self {
+        crate::theme::apply_window_chrome(&window);
         Self {
             window,
             surface,
             view,
             needs_redraw: true,
+            applied_theme: Some(crate::theme::mode()),
         }
     }
 
@@ -1847,6 +1851,11 @@ impl SettingsWindow {
     }
 
     pub fn render(&mut self) {
+        let mode = crate::theme::mode();
+        if self.applied_theme != Some(mode) {
+            crate::theme::apply_window_chrome(&self.window);
+            self.applied_theme = Some(mode);
+        }
         let pixmap = self.view.render();
         let phys = self.window.inner_size();
         let pw = phys.width.max(1);
