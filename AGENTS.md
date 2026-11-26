@@ -15,6 +15,7 @@ Source of truth: `Real-Fruit-Snacks/rfs-brand` (`v2.1.0`).
 - **Typography**: Self-hosted variable WOFF2 only (`Big Shoulders Stencil`, `Albert Sans`, `Azeret Mono`, plus `OFL.txt`) in `docs/assets/fonts/`. Zero external CDNs. Keep `font-variant-ligatures: none` on `Azeret Mono` so `(R)` and `(C)` stay literal.
 - **Scroll Shell**: `<body class="rfs-shell">` + pinned `<header class="rfs-shell-header">` + `<div class="rfs-scroll-region">` so the vertical scrollbar never enters the top header bar. Never animate `scrollbar-color`.
 - **Voice**: Plain, specific, honest — zero emoji, zero exclamation marks in headings or descriptions, zero hype copy.
+- **README & Docs (`BRAND.md` §14)**: Keep `README.md` ultra-minimal (40–60 lines); put detailed usage, hotkeys, configuration, and troubleshooting in `docs/*.md` (never GitHub Wiki).
 
 ## Rust App & Website Invariants
 

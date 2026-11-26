@@ -4,7 +4,7 @@ One maintainer, one tool. Small, specific changes land fastest.
 
 ## Before you start
 
-Open an issue first for anything bigger than a bug fix, so we agree on the shape before you write it. Check [Known issues](README.md#known-issues) and the open issues; the thing you hit may already be there.
+Open an issue first for anything bigger than a bug fix, so we agree on the shape before you write it. Check [Known issues](docs/USAGE.md#known-issues) and the open issues; the thing you hit may already be there.
 
 ## Building
 
