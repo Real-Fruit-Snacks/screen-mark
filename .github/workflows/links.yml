@@ -1,0 +1,34 @@
+name: links
+
+# Links in the README, changelog, docs, and project page. Monthly too, because external links
+# can move without this repo changing.
+on:
+  push:
+    branches: [main]
+    paths: ['README.md', 'CHANGELOG.md', 'docs/**.md', 'docs/**.html', '.github/workflows/links.yml']
+  schedule:
+    - cron: '19 6 3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lychee:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --no-progress --max-retries 4 --retry-wait-time 10 --timeout 30
+            --accept 200,206,429
+            --exclude '\.example\b'
+            --exclude '^http://host:port'
+            --exclude '^https://github\.com/Real-Fruit-Snacks/screen-mark/(issues/new|security/advisories/new)'
+            --remap '^https://github\.com/Real-Fruit-Snacks/screen-mark/blob/main/(.*)$ file://${{ github.workspace }}/$1'
+            README.md CHANGELOG.md 'docs/*.md' 'docs/*.html'
+          fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

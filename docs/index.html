@@ -30,7 +30,8 @@
   d.classList.add('js');
   setTimeout(function(){if(!window.smReady)d.classList.remove('js')},4000);
   try{
-    if(localStorage.getItem('rfs-theme')==='light'){
+    var t=localStorage.getItem('rfs-theme')||localStorage.getItem('color-scheme');
+    if(t==='light'||t==='dayshift'){
       d.setAttribute('data-theme','light');
       var cs=document.querySelector('meta[name="color-scheme"]');
       var tc=document.querySelector('meta[name="theme-color"]');
@@ -324,10 +325,10 @@
           <p id="cargo-l">Or build it from source with <a href="https://rustup.rs">Rust</a> 1.88 or later:</p>
           <div class="rfs-code-card">
             <div class="rfs-code-head">
-              <span class="rfs-code-lang">SHELL</span>
+              <span class="rfs-badge b-steel"><span class="k">[shell]</span> Build from source</span>
               <button type="button" class="rfs-code-copy copy" aria-label="Copy the cargo command" data-copy="cargo install --git https://github.com/Real-Fruit-Snacks/screen-mark --locked">Copy</button>
             </div>
-            <pre><code><span class="rfs-tok-cmd">cargo</span> install <span class="rfs-tok-flag">--git</span> https://github.com/Real-Fruit-Snacks/screen-mark <span class="rfs-tok-flag">--locked</span></code></pre>
+            <pre class="rfs-code-block"><code><span class="rfs-tok-fn">cargo</span> install <span class="rfs-tok-kw">--git</span> <span class="rfs-tok-str">https://github.com/Real-Fruit-Snacks/screen-mark</span> <span class="rfs-tok-kw">--locked</span></code></pre>
           </div>
         </div>
 
@@ -340,7 +341,7 @@
           <div><dt><code>screen-mark edit photo.png</code></dt><dd>Opens an image to mark up; with no file, the clipboard’s image.</dd></div>
           <div><dt><code>screen-mark install</code></dt><dd>Copies the exe to AppData with a Start Menu entry and PATH. <code>uninstall</code> removes it.</dd></div>
         </dl>
-        <p class="install__config">Settings are written on first run to <code>%APPDATA%\<wbr><span class="nowrap">screen-mark</span>\<wbr>config.toml</code> on Windows or <code>~/.config/<wbr><span class="nowrap">screen-mark</span>/<wbr>config.toml</code> on Linux. Every key is optional; <a href="https://github.com/Real-Fruit-Snacks/screen-mark#configuration">the README lists them</a>.</p>
+        <p class="install__config">Settings are written on first run to <code>%APPDATA%\<wbr><span class="nowrap">screen-mark</span>\<wbr>config.toml</code> on Windows or <code>~/.config/<wbr><span class="nowrap">screen-mark</span>/<wbr>config.toml</code> on Linux. Every key is optional; <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/docs/CONFIGURATION.md">the configuration guide lists them</a>.</p>
       </div>
     </div>
   </section>
@@ -376,7 +377,7 @@
 <footer class="foot">
   <div class="wrap foot__in">
     <p class="foot__name">screen-mark 2.4.4 &middot; MIT &middot; an <a href="https://real-fruit-snacks.github.io/">RFS</a> tool</p>
-    <p class="foot__links"><a href="https://github.com/Real-Fruit-Snacks/screen-mark">Source</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases">Releases</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/CHANGELOG.md">Changelog</a></p>
+    <p class="foot__links"><a href="https://github.com/Real-Fruit-Snacks/screen-mark">Source</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/docs/USAGE.md">Usage</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/docs/CONFIGURATION.md">Configuration</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/releases">Releases</a> <a href="https://github.com/Real-Fruit-Snacks/screen-mark/blob/main/CHANGELOG.md">Changelog</a></p>
     <p class="foot__colophon">Set in Big Shoulders Stencil, Albert Sans, and Azeret Mono. Toolbar icons from Lucide, the same set the app draws.</p>
   </div>
 </footer>

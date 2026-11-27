@@ -58,8 +58,8 @@
   --cross-line: color-mix(in oklab, var(--sm-accent) 55%, transparent);
 
   --stage-bg:
-    linear-gradient(125deg in oklab, color-mix(in oklab, var(--rfs-steel) 20%, transparent) 0%, transparent 48%, color-mix(in oklab, var(--rfs-beacon) 14%, transparent) 100%),
-    var(--rfs-surface);
+    linear-gradient(125deg var(--rfs-in-oklab), color-mix(in oklab, var(--rfs-steel) 20%, transparent) 0%, transparent 48%, color-mix(in oklab, var(--rfs-beacon) 14%, transparent) 100%),
+    var(--rfs-bg);
 
   --marker-ink: #050507;
   --hl: color-mix(in oklab, var(--rfs-accent) 72%, transparent);
@@ -104,7 +104,7 @@
 :root[data-theme="light"] {
   --dim: rgb(17 20 27 / 0.28);
   --stage-bg:
-    linear-gradient(125deg in oklab, color-mix(in oklab, var(--rfs-steel) 10%, transparent) 0%, transparent 48%, color-mix(in oklab, var(--rfs-beacon) 8%, transparent) 100%),
+    linear-gradient(125deg var(--rfs-in-oklab), color-mix(in oklab, var(--rfs-steel) 30%, transparent) 0%, transparent 48%, color-mix(in oklab, var(--rfs-beacon) 26%, transparent) 100%),
     var(--rfs-bg);
   --marker-ink: #050507;
   --hl: color-mix(in oklab, #FFC247 55%, transparent);
@@ -203,7 +203,7 @@ kbd {
   display: flex; align-items: center; justify-content: flex-end;
   gap: clamp(0.75rem, 0.35rem + 1.2vw, 1.65rem); font-size: 0.92rem; font-weight: 500;
 }
-.bar__nav a { color: var(--rfs-mute); text-decoration: none; padding-block: 0.5rem; white-space: nowrap; }
+.bar__nav a { display: inline-flex; align-items: center; min-height: 44px; color: var(--rfs-mute); text-decoration: none; padding-block: 0.5rem; white-space: nowrap; }
 @media (hover: hover) { .bar__nav a:hover { color: var(--rfs-text); } }
 
 .theme-btn {
@@ -211,7 +211,7 @@ kbd {
   font: 600 0.75rem/1 var(--mono); letter-spacing: 0.06em;
   color: var(--rfs-text); background: var(--rfs-surface);
   border: 1px solid var(--rfs-line-strong); border-radius: 4px;
-  padding: 0.48rem 0.72rem; min-height: 2.25rem;
+  padding: 0.48rem 0.72rem; min-height: 44px;
   cursor: pointer; white-space: nowrap; flex: none;
   transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease);
 }
@@ -406,8 +406,10 @@ html:not(.js) .copy { display: none; }
   position: fixed;
   inset: auto 1.25rem 1.25rem auto;
   margin: 0;
+  z-index: var(--rfs-z-toast);
+  max-width: min(25rem, calc(100vw - 2.5rem));
 }
-#rfs-toast:not(:popover-open) { display: none; }
+#rfs-toast:not(:popover-open):not(.is-open) { display: none; }
 
 /* ---------- Sections ---------- */
 main > section:not(.stage) { padding-block: var(--space-xl-3xl); }
@@ -549,11 +551,15 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
   line-height: 1.55;
 }
 .cargo .rfs-code-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
   background: var(--rfs-raised);
   color: var(--rfs-text);
   border: 1px solid var(--rfs-line-strong);
   border-radius: 4px;
-  padding: 0.36rem 0.72rem;
+  padding: 0.36rem 0.85rem;
   font: 600 0.75rem/1 var(--mono);
   letter-spacing: 0.04em;
   cursor: pointer;
@@ -582,8 +588,8 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 .foot { border-top: 1px solid var(--rfs-line); padding-block: var(--space-xl); font-size: var(--step--1); color: var(--rfs-mute); }
 .foot__in { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-s) var(--space-xl); }
 .foot__name { color: var(--rfs-text); font-weight: 600; }
-.foot__links { display: flex; flex-wrap: wrap; gap: var(--space-m); }
-.foot__links a { padding-block: 0.3rem; }
+.foot__links { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem var(--space-m); }
+.foot__links a, .foot a { display: inline-flex; align-items: center; min-height: 44px; padding-block: 0.3rem; }
 .foot__colophon { flex-basis: 100%; }
 
 /* ---------- Motion & View Transitions ---------- */
@@ -595,6 +601,16 @@ button.key { appearance: none; margin: 0; text-align: start; cursor: pointer; }
 @keyframes rfs-theme-reveal {
   from { clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%)); }
   to   { clip-path: circle(var(--vt-r, 150vmax) at var(--vt-x, 50%) var(--vt-y, 50%)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+@media (pointer: coarse) {
+  .rfs-toast-close { min-width: 44px; min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

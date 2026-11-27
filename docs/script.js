@@ -440,13 +440,47 @@ ${stamp()}`),
   const rfsToast = document.getElementById('rfs-toast');
   let rfsToastTimer = 0;
 
+  function hideRfsToast() {
+    clearTimeout(rfsToastTimer);
+    if (!rfsToast) return;
+    rfsToast.classList.remove('is-open');
+    try { if (rfsToast.matches(':popover-open')) rfsToast.hidePopover(); } catch (_) {}
+  }
+
   function showRfsToast(msg, kind = 'is-ok') {
+    if (typeof document.ariaNotify === 'function') {
+      try { document.ariaNotify(msg); } catch (_) {}
+    }
     if (!rfsToast) return;
     rfsToast.className = 'rfs-toast ' + kind;
-    rfsToast.textContent = msg;
-    try { rfsToast.showPopover(); } catch (_) {}
+    rfsToast.replaceChildren();
+    const span = document.createElement('span');
+    span.textContent = msg;
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'rfs-toast-close';
+    close.setAttribute('aria-label', 'Dismiss notification');
+    close.setAttribute('popovertarget', 'rfs-toast');
+    close.setAttribute('popovertargetaction', 'hide');
+    close.textContent = '×';
+    close.addEventListener('click', hideRfsToast);
+    rfsToast.append(span, close);
+    let opened = false;
+    if (typeof rfsToast.showPopover === 'function') {
+      try {
+        if (!rfsToast.matches(':popover-open')) rfsToast.showPopover();
+        opened = rfsToast.matches(':popover-open');
+      } catch (_) {}
+    }
+    if (!opened) rfsToast.classList.add('is-open');
     clearTimeout(rfsToastTimer);
-    rfsToastTimer = setTimeout(() => { try { rfsToast.hidePopover(); } catch (_) {} }, 2600);
+    const scheduleHide = () => {
+      rfsToastTimer = setTimeout(() => {
+        if (rfsToast.contains(document.activeElement)) { scheduleHide(); return; }
+        hideRfsToast();
+      }, 2600);
+    };
+    scheduleHide();
   }
 
   function applyTheme(next) {
@@ -468,7 +502,10 @@ ${stamp()}`),
   if (themeBtn) {
     themeBtn.addEventListener('click', (e) => {
       const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-      try { localStorage.setItem('rfs-theme', next); } catch (_) {}
+      try {
+        localStorage.setItem('rfs-theme', next);
+        localStorage.setItem('color-scheme', next);
+      } catch (_) {}
       const r = themeBtn.getBoundingClientRect();
       const x = e.clientX || (r.left + r.width / 2);
       const y = e.clientY || (r.top + r.height / 2);
@@ -476,12 +513,18 @@ ${stamp()}`),
       document.documentElement.style.setProperty('--vt-x', x + 'px');
       document.documentElement.style.setProperty('--vt-y', y + 'px');
       document.documentElement.style.setProperty('--vt-r', maxR + 'px');
-      if (document.startViewTransition && !still) document.startViewTransition(() => applyTheme(next));
-      else applyTheme(next);
+      if (document.startViewTransition && !still) {
+        const vt = document.startViewTransition(() => applyTheme(next));
+        Promise.allSettled([vt.ready, vt.updateCallbackDone, vt.finished]);
+      } else {
+        applyTheme(next);
+      }
     });
   }
   addEventListener('storage', (e) => {
-    if (e.key === 'rfs-theme') applyTheme(e.newValue === 'light' ? 'light' : 'dark');
+    if (e.key === 'rfs-theme' || e.key === 'color-scheme') {
+      applyTheme(e.newValue === 'light' || e.newValue === 'dayshift' ? 'light' : 'dark');
+    }
   });
 
   // --- The highlighter mark in the quote draws in once, when it's on screen ---
@@ -492,18 +535,53 @@ ${stamp()}`),
   } else if (mark) mark.classList.add('is-drawn');
 
   // --- Copy button in Install ---
-  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
-    const done = (ok) => {
-      b.textContent = ok ? '[ok] Copied' : 'Press Ctrl+C';
-      announce(ok ? 'Copied the cargo command' : 'Couldn’t copy. The command is selected; press Ctrl+C.');
-      if (ok) showRfsToast('[ok] Command copied to clipboard.', 'is-ok');
-      setTimeout(() => (b.textContent = 'Copy'), 2500);
-    };
-    const codeEl = b.closest('.rfs-code-card')?.querySelector('pre code') || b.previousElementSibling;
-    const selectIt = () => { const r = document.createRange(); r.selectNodeContents(codeEl); getSelection().removeAllRanges(); getSelection().addRange(r); done(false); };
-    if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy).then(() => done(true), selectIt);
-    else selectIt();
-  }));
+  async function copyCommand(text, codeEl) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (_) {}
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      const copied = document.execCommand('copy');
+      ta.remove();
+      if (copied) return true;
+    } catch (_) {}
+    if (codeEl) {
+      try {
+        const r = document.createRange();
+        r.selectNodeContents(codeEl);
+        const selObj = getSelection();
+        selObj.removeAllRanges();
+        selObj.addRange(r);
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  document.querySelectorAll('[data-copy]').forEach((b) => {
+    const label = b.textContent;
+    b.addEventListener('click', () => {
+      const codeEl = b.closest('.rfs-code-card')?.querySelector('pre code') || b.previousElementSibling;
+      const text = b.dataset.copy || (codeEl ? codeEl.textContent.trim() : '');
+      copyCommand(text, codeEl).then((ok) => {
+        b.textContent = ok ? '[ok] Copied' : 'Press Ctrl+C';
+        announce(ok ? 'Copied the cargo command' : 'Couldn’t copy. The command is selected; press Ctrl+C.');
+        showRfsToast(
+          ok ? '[ok] Command copied to clipboard.' : '[!] Command selected — press Ctrl+C.',
+          ok ? 'is-ok' : 'is-warn'
+        );
+        clearTimeout(b._copyTimer);
+        b._copyTimer = setTimeout(() => { b.textContent = label; }, 1800);
+      });
+    });
+  });
 
   // --- Keep the first selection on the download block when the layout changes (fonts, resizes) ---
   let rz = 0;
