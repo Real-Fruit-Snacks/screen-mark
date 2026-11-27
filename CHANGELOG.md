@@ -181,7 +181,7 @@ Everything needed to run and build screen-mark with no internet access is now in
 - **Light mode.** The whole app (capture overlay, toolbar, settings, and history windows) now renders in light as well as dark. Switch it from Settings › General, or set `theme = "dark" | "light"` in `config.toml`.
 
 ### Changed
-- **Retheme to the [Terminal Workbench](https://github.com/Real-Fruit-Snacks/terminal-workbench-design-system) design system.** Graphite surfaces, quiet chrome, and restrained accents replace the previous palette across both the app and the website. The five annotation presets (red, blue, green, yellow, mauve) now map to the theme's semantic hues; existing `default_color` names in `config.toml` keep working.
+- **Retheme to the Terminal Workbench design system.** Graphite surfaces, quiet chrome, and restrained accents replace the previous palette across both the app and the website. The five annotation presets (red, blue, green, yellow, mauve) now map to the theme's semantic hues; existing `default_color` names in `config.toml` keep working.
 - The project website is rebuilt on the Terminal Workbench tokens with self-hosted fonts, so it works fully offline; a GitLab Pages workflow is included for air-gapped hosting.
 
 ### Security
